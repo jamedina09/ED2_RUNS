@@ -1,9 +1,13 @@
 #!/usr/bin/env Rscript
-# Build the BCI ED2IN namelist in R using PEcAn.ED2's read_ed2in/modify_ed2in/
-# write_ed2in, based on the repo's main template (ED/run/ED2IN).
+# Build the BCI ED2IN namelist in R using read_ed2in()/modify_ed2in()/
+# write_ed2in() from R-tools/ed2in_io.R (vendored from PEcAn.ED2 - see that
+# file's header for full attribution/license - so this repo does not
+# require installing the full PEcAn.ED2 package and its dependency chain),
+# based on the repo's main template (ED/run/ED2IN).
 #
-# Two known PEcAn.ED2 issues worked around here (both confirmed by testing
-# directly against this template before writing this script):
+# Two known issues (inherited from upstream PEcAn.ED2, still present in the
+# vendored copy) worked around here (both confirmed by testing directly
+# against this template):
 #   1. read_ed2in() only captures the first line of multi-line array
 #      parameters (e.g. NL%SLZ spans 2 physical lines for NZG=16 layers;
 #      read_ed2in() silently returns only the first 10 values). Confirmed:
@@ -66,8 +70,6 @@
 #   extract_bci_sizeclass_output.R (those are monthly-only) - read the
 #   extra files directly with hdf5r if you need finer resolution.
 
-library(PEcAn.ED2)
-
 # --- Experiment selection ----------------------------------------------------
 .cli_args <- commandArgs(trailingOnly = TRUE)
 .get_flag <- function(name, default) {
@@ -115,6 +117,7 @@ output_freq_flag <- .get_flag("output_freq", "monthly")
 }
 repo_root <- .find_repo_root(.this_dir)
 source(file.path(repo_root, "R-tools/registry_utils.R")) # cross-site tool - lives at the repo root, not under sites/BCI/
+source(file.path(repo_root, "R-tools/ed2in_io.R")) # read_ed2in()/modify_ed2in()/write_ed2in(), vendored from PEcAn.ED2
 site_id <- "BCI" # hardcoded: this script only ever builds BCI experiments (it lives inside sites/BCI/)
 run_dir <- file.path(repo_root, "sites/BCI/run")
 exp_rel_dir <- file.path("experiments", exp_id) # relative to run_dir -> /data inside the container
