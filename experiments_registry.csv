@@ -1,0 +1,2 @@
+exp_id,site,name,created_at,plant_hydro_scheme,start_date,end_date,pft_config,status,run_seconds,notes
+baseline_20260716_171019,BCI,baseline,2026-07-16 17:10:19,0,2003-01-01,2003-03-31,,built,,

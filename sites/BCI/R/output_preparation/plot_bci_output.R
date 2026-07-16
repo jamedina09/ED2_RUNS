@@ -16,6 +16,12 @@
 # Usage: Rscript sites/BCI/R/output_preparation/plot_bci_output.R --exp=<id> [--resolution=monthly|daily|hourly]
 # (run extract_bci_output.R --exp=<same> --resolution=<same> first if the
 # .rds files don't exist yet)
+#
+# This script takes no --variables/--sizeclass_variables flags of its own -
+# it just plots whatever columns extract_bci_output.R actually wrote. If
+# that experiment was extracted with a restricted --variables/
+# --sizeclass_variables list, any plot below whose required column(s)
+# aren't present is skipped with a console note instead of erroring.
 
 library(data.table)
 library(ggplot2)
@@ -77,6 +83,17 @@ save_plot <- function(p, name, width = 8, height = 5) {
   cat("Wrote", path, "\n")
 }
 
+# Since extract_bci_output.R's --variables/--sizeclass_variables can now
+# produce a table with only a subset of the usual columns, every plot below
+# checks its required columns exist first and skips (with a console note)
+# instead of erroring if that variable wasn't extracted for this experiment.
+have_cols <- function(cols, table) all(cols %in% names(table))
+skip_note <- function(plot_name, cols, table) {
+  cat("Skipping", plot_name, "- missing column(s):",
+      paste(setdiff(cols, names(table)), collapse = ", "),
+      "(not requested via --variables/--sizeclass_variables when extracting)\n")
+}
+
 # A datetime x PFT matrix (heatmap), for any ecosystem-scale variable broken
 # down by PFT - used instead of a stacked bar/area so each PFT's own
 # magnitude stays readable rather than being hidden inside a cumulative stack.
@@ -96,58 +113,74 @@ matrix_by_pft <- function(measure_cols, title, fill_label) {
 # Carbon fluxes (ecosystem scale)
 # =============================================================================
 
-flux_long <- melt(dt, id.vars = "datetime",
-                   measure.vars = c("GPP", "NPP", "PlantResp", "HeteroResp"),
-                   variable.name = "flux", value.name = "value")
-p_flux <- ggplot(flux_long, aes(datetime, value, colour = flux)) +
-  geom_line(linewidth = 0.5) +
-  scale_colour_brewer(palette = "Set2", name = NULL) +
-  labs(title = "BCI: carbon fluxes",
-       x = NULL, y = "Flux (ED2 native units, see README.md)") +
-  theme_bci
-save_plot(p_flux, "flux_01_gpp_npp_resp.png")
+flux_cols <- c("GPP", "NPP", "PlantResp", "HeteroResp")
+if (have_cols(flux_cols, dt)) {
+  flux_long <- melt(dt, id.vars = "datetime", measure.vars = flux_cols,
+                     variable.name = "flux", value.name = "value")
+  p_flux <- ggplot(flux_long, aes(datetime, value, colour = flux)) +
+    geom_line(linewidth = 0.5) +
+    scale_colour_brewer(palette = "Set2", name = NULL) +
+    labs(title = "BCI: carbon fluxes",
+         x = NULL, y = "Flux (ED2 native units, see README.md)") +
+    theme_bci
+  save_plot(p_flux, "flux_01_gpp_npp_resp.png")
+} else skip_note("flux_01_gpp_npp_resp.png", flux_cols, dt)
 
-p_nep <- ggplot(dt, aes(datetime, NEP)) +
-  geom_hline(yintercept = 0, colour = "grey60", linetype = "dashed") +
-  geom_line(colour = "#1b9e77", linewidth = 0.5) +
-  labs(title = "BCI: net ecosystem productivity (NEP)",
-       x = NULL, y = "NEP (ED2 native units)") +
-  theme_bci
-save_plot(p_nep, "flux_02_nep.png")
+if (have_cols("NEP", dt)) {
+  p_nep <- ggplot(dt, aes(datetime, NEP)) +
+    geom_hline(yintercept = 0, colour = "grey60", linetype = "dashed") +
+    geom_line(colour = "#1b9e77", linewidth = 0.5) +
+    labs(title = "BCI: net ecosystem productivity (NEP)",
+         x = NULL, y = "NEP (ED2 native units)") +
+    theme_bci
+  save_plot(p_nep, "flux_02_nep.png")
+} else skip_note("flux_02_nep.png", "NEP", dt)
 
 # =============================================================================
 # Carbon stocks - ecosystem totals, and by-PFT matrices (see the sizeclass_*
 # plots below for the further PFT x size-class breakdown)
 # =============================================================================
 
-p_lai <- ggplot(dt, aes(datetime, LAI_total)) +
-  geom_line(colour = "#1b9e77", linewidth = 0.5) +
-  labs(title = "BCI: total leaf area index", x = NULL, y = expression(LAI~(m^2/m^2))) +
-  theme_bci
-save_plot(p_lai, "stock_01_lai_total.png")
+if (have_cols("LAI_total", dt)) {
+  p_lai <- ggplot(dt, aes(datetime, LAI_total)) +
+    geom_line(colour = "#1b9e77", linewidth = 0.5) +
+    labs(title = "BCI: total leaf area index", x = NULL, y = expression(LAI~(m^2/m^2))) +
+    theme_bci
+  save_plot(p_lai, "stock_01_lai_total.png")
+} else skip_note("stock_01_lai_total.png", "LAI_total", dt)
 
-p_agb <- ggplot(dt, aes(datetime, AGB_total)) +
-  geom_line(colour = "#7570b3", linewidth = 0.5) +
-  labs(title = "BCI: total aboveground biomass", x = NULL,
-       y = "AGB (ED2 native units)") +
-  theme_bci
-save_plot(p_agb, "stock_02_agb_total.png")
+if (have_cols("AGB_total", dt)) {
+  p_agb <- ggplot(dt, aes(datetime, AGB_total)) +
+    geom_line(colour = "#7570b3", linewidth = 0.5) +
+    labs(title = "BCI: total aboveground biomass", x = NULL,
+         y = "AGB (ED2 native units)") +
+    theme_bci
+  save_plot(p_agb, "stock_02_agb_total.png")
+} else skip_note("stock_02_agb_total.png", "AGB_total", dt)
 
-save_plot(matrix_by_pft(c("AGB_pft2", "AGB_pft3", "AGB_pft4"),
-                         "BCI: aboveground biomass by PFT", "AGB"),
-          "stock_03_agb_by_pft_matrix.png")
+agb_pft_cols <- c("AGB_pft2", "AGB_pft3", "AGB_pft4")
+if (have_cols(agb_pft_cols, dt)) {
+  save_plot(matrix_by_pft(agb_pft_cols, "BCI: aboveground biomass by PFT", "AGB"),
+            "stock_03_agb_by_pft_matrix.png")
+} else skip_note("stock_03_agb_by_pft_matrix.png", agb_pft_cols, dt)
 
-save_plot(matrix_by_pft(c("LAI_pft2", "LAI_pft3", "LAI_pft4"),
-                         "BCI: leaf area index by PFT", "LAI"),
-          "stock_04_lai_by_pft_matrix.png")
+lai_pft_cols <- c("LAI_pft2", "LAI_pft3", "LAI_pft4")
+if (have_cols(lai_pft_cols, dt)) {
+  save_plot(matrix_by_pft(lai_pft_cols, "BCI: leaf area index by PFT", "LAI"),
+            "stock_04_lai_by_pft_matrix.png")
+} else skip_note("stock_04_lai_by_pft_matrix.png", lai_pft_cols, dt)
 
-save_plot(matrix_by_pft(c("NPLANT_pft2", "NPLANT_pft3", "NPLANT_pft4"),
-                         "BCI: plant density by PFT", "Plants/m2"),
-          "stock_05_nplant_by_pft_matrix.png")
+nplant_pft_cols <- c("NPLANT_pft2", "NPLANT_pft3", "NPLANT_pft4")
+if (have_cols(nplant_pft_cols, dt)) {
+  save_plot(matrix_by_pft(nplant_pft_cols, "BCI: plant density by PFT", "Plants/m2"),
+            "stock_05_nplant_by_pft_matrix.png")
+} else skip_note("stock_05_nplant_by_pft_matrix.png", nplant_pft_cols, dt)
 
-save_plot(matrix_by_pft(c("Bstorage_pft2", "Bstorage_pft3", "Bstorage_pft4"),
-                         "BCI: non-structural (storage) carbon by PFT", "Bstorage"),
-          "stock_06_bstorage_by_pft_matrix.png")
+bstorage_pft_cols <- c("Bstorage_pft2", "Bstorage_pft3", "Bstorage_pft4")
+if (have_cols(bstorage_pft_cols, dt)) {
+  save_plot(matrix_by_pft(bstorage_pft_cols, "BCI: non-structural (storage) carbon by PFT", "Bstorage"),
+            "stock_06_bstorage_by_pft_matrix.png")
+} else skip_note("stock_06_bstorage_by_pft_matrix.png", bstorage_pft_cols, dt)
 
 # =============================================================================
 # Water and plant hydraulics
@@ -156,116 +189,134 @@ save_plot(matrix_by_pft(c("Bstorage_pft2", "Bstorage_pft3", "Bstorage_pft4"),
 # The key PLANT_HYDRO_SCHEME diagnostic: both are identically 0 whenever
 # PLANT_HYDRO_SCHEME=0 (no internal water transport tracked - see
 # extract_bci_output.R), non-zero once dynamic hydraulics are on.
-wflux_long <- melt(dt, id.vars = "datetime",
-                    measure.vars = c("WfluxGW", "WfluxWL"),
-                    variable.name = "flux", value.name = "value")
-wflux_long[, flux := c(WfluxGW = "Soil -> wood (GW)", WfluxWL = "Wood -> leaf (WL)")[as.character(flux)]]
-p_wflux <- ggplot(wflux_long, aes(datetime, value, colour = flux)) +
-  geom_hline(yintercept = 0, colour = "grey60", linetype = "dashed") +
-  geom_line(linewidth = 0.5) +
-  scale_colour_brewer(palette = "Set1", name = NULL) +
-  labs(title = "BCI: internal plant water fluxes (PLANT_HYDRO_SCHEME diagnostic)",
-       x = NULL, y = expression(Water~flux~(kg~m^-2~s^-1))) +
-  theme_bci
-save_plot(p_wflux, "water_01_plant_water_fluxes.png")
+wflux_cols <- c("WfluxGW", "WfluxWL")
+if (have_cols(wflux_cols, dt)) {
+  wflux_long <- melt(dt, id.vars = "datetime", measure.vars = wflux_cols,
+                      variable.name = "flux", value.name = "value")
+  wflux_long[, flux := c(WfluxGW = "Soil -> wood (GW)", WfluxWL = "Wood -> leaf (WL)")[as.character(flux)]]
+  p_wflux <- ggplot(wflux_long, aes(datetime, value, colour = flux)) +
+    geom_hline(yintercept = 0, colour = "grey60", linetype = "dashed") +
+    geom_line(linewidth = 0.5) +
+    scale_colour_brewer(palette = "Set1", name = NULL) +
+    labs(title = "BCI: internal plant water fluxes (PLANT_HYDRO_SCHEME diagnostic)",
+         x = NULL, y = expression(Water~flux~(kg~m^-2~s^-1))) +
+    theme_bci
+  save_plot(p_wflux, "water_01_plant_water_fluxes.png")
+} else skip_note("water_01_plant_water_fluxes.png", wflux_cols, dt)
 
-water_content_long <- melt(dt, id.vars = "datetime",
-                            measure.vars = c("LeafWater", "WoodWater"),
-                            variable.name = "pool", value.name = "value")
-water_content_long[, pool := c(LeafWater = "Leaf", WoodWater = "Wood")[as.character(pool)]]
-p_water_content <- ggplot(water_content_long, aes(datetime, value, colour = pool)) +
-  geom_line(linewidth = 0.5) +
-  scale_colour_manual(values = c(Leaf = "#1b9e77", Wood = "#a6761d"), name = NULL) +
-  labs(title = "BCI: leaf and wood water content",
-       x = NULL, y = expression(Water~content~(kg~m^-2))) +
-  theme_bci
-save_plot(p_water_content, "water_02_leaf_wood_water_content.png")
+water_content_cols <- c("LeafWater", "WoodWater")
+if (have_cols(water_content_cols, dt)) {
+  water_content_long <- melt(dt, id.vars = "datetime", measure.vars = water_content_cols,
+                              variable.name = "pool", value.name = "value")
+  water_content_long[, pool := c(LeafWater = "Leaf", WoodWater = "Wood")[as.character(pool)]]
+  p_water_content <- ggplot(water_content_long, aes(datetime, value, colour = pool)) +
+    geom_line(linewidth = 0.5) +
+    scale_colour_manual(values = c(Leaf = "#1b9e77", Wood = "#a6761d"), name = NULL) +
+    labs(title = "BCI: leaf and wood water content",
+         x = NULL, y = expression(Water~content~(kg~m^-2))) +
+    theme_bci
+  save_plot(p_water_content, "water_02_leaf_wood_water_content.png")
+} else skip_note("water_02_leaf_wood_water_content.png", water_content_cols, dt)
 
-et_long <- melt(dt, id.vars = "datetime",
-                 measure.vars = c("Transp", "ET"),
-                 variable.name = "flux", value.name = "value")
-et_long[, flux := c(Transp = "Plant transpiration", ET = "Net canopy<->atm vapor flux (ET)")[as.character(flux)]]
-p_et <- ggplot(et_long, aes(datetime, value, colour = flux)) +
-  geom_line(linewidth = 0.5) +
-  scale_colour_brewer(palette = "Dark2", name = NULL) +
-  labs(title = "BCI: transpiration and evapotranspiration",
-       x = NULL, y = expression(Water~flux~(kg~m^-2~s^-1))) +
-  theme_bci
-save_plot(p_et, "water_03_transpiration_et.png")
+et_cols <- c("Transp", "ET")
+if (have_cols(et_cols, dt)) {
+  et_long <- melt(dt, id.vars = "datetime", measure.vars = et_cols,
+                   variable.name = "flux", value.name = "value")
+  et_long[, flux := c(Transp = "Plant transpiration", ET = "Net canopy<->atm vapor flux (ET)")[as.character(flux)]]
+  p_et <- ggplot(et_long, aes(datetime, value, colour = flux)) +
+    geom_line(linewidth = 0.5) +
+    scale_colour_brewer(palette = "Dark2", name = NULL) +
+    labs(title = "BCI: transpiration and evapotranspiration",
+         x = NULL, y = expression(Water~flux~(kg~m^-2~s^-1))) +
+    theme_bci
+  save_plot(p_et, "water_03_transpiration_et.png")
+} else skip_note("water_03_transpiration_et.png", et_cols, dt)
 
-fsw_long <- melt(dt, id.vars = "datetime",
-                  measure.vars = c("FSW", "FS_open"),
-                  variable.name = "factor", value.name = "value")
-fsw_long[, factor := c(FSW = "Water availability (fsw)", FS_open = "Realized stomatal opening (fs_open)")[as.character(factor)]]
-p_fsw <- ggplot(fsw_long, aes(datetime, value, colour = factor)) +
-  geom_line(linewidth = 0.5) +
-  ylim(0, 1) +
-  scale_colour_brewer(palette = "Set2", name = NULL) +
-  labs(title = "BCI: water-limitation and stomatal-opening factors",
-       x = NULL, y = "Factor (0 = fully limited, 1 = unlimited)") +
-  theme_bci
-save_plot(p_fsw, "water_04_limitation_factors.png")
+fsw_cols <- c("FSW", "FS_open")
+if (have_cols(fsw_cols, dt)) {
+  fsw_long <- melt(dt, id.vars = "datetime", measure.vars = fsw_cols,
+                    variable.name = "factor", value.name = "value")
+  fsw_long[, factor := c(FSW = "Water availability (fsw)", FS_open = "Realized stomatal opening (fs_open)")[as.character(factor)]]
+  p_fsw <- ggplot(fsw_long, aes(datetime, value, colour = factor)) +
+    geom_line(linewidth = 0.5) +
+    ylim(0, 1) +
+    scale_colour_brewer(palette = "Set2", name = NULL) +
+    labs(title = "BCI: water-limitation and stomatal-opening factors",
+         x = NULL, y = "Factor (0 = fully limited, 1 = unlimited)") +
+    theme_bci
+  save_plot(p_fsw, "water_04_limitation_factors.png")
+} else skip_note("water_04_limitation_factors.png", fsw_cols, dt)
 
-vpd_long <- melt(dt, id.vars = "datetime",
-                  measure.vars = c("LeafVPD", "CanVPD"),
-                  variable.name = "level", value.name = "value")
-vpd_long[, level := c(LeafVPD = "Leaf", CanVPD = "Canopy air")[as.character(level)]]
-p_vpd <- ggplot(vpd_long, aes(datetime, value / 1000, colour = level)) +   # Pa -> kPa
-  geom_line(linewidth = 0.5) +
-  scale_colour_manual(values = c(Leaf = "#e6550d", `Canopy air` = "#3182bd"), name = NULL) +
-  labs(title = "BCI: vapor pressure deficit", x = NULL, y = "VPD (kPa)") +
-  theme_bci
-save_plot(p_vpd, "water_05_vpd.png")
+vpd_cols <- c("LeafVPD", "CanVPD")
+if (have_cols(vpd_cols, dt)) {
+  vpd_long <- melt(dt, id.vars = "datetime", measure.vars = vpd_cols,
+                    variable.name = "level", value.name = "value")
+  vpd_long[, level := c(LeafVPD = "Leaf", CanVPD = "Canopy air")[as.character(level)]]
+  p_vpd <- ggplot(vpd_long, aes(datetime, value / 1000, colour = level)) +   # Pa -> kPa
+    geom_line(linewidth = 0.5) +
+    scale_colour_manual(values = c(Leaf = "#e6550d", `Canopy air` = "#3182bd"), name = NULL) +
+    labs(title = "BCI: vapor pressure deficit", x = NULL, y = "VPD (kPa)") +
+    theme_bci
+  save_plot(p_vpd, "water_05_vpd.png")
+} else skip_note("water_05_vpd.png", vpd_cols, dt)
 
 # =============================================================================
 # Energy balance and microclimate
 # =============================================================================
 
-temp_long <- melt(dt, id.vars = "datetime",
-                   measure.vars = c("LeafTemp", "CanTemp"),
-                   variable.name = "level", value.name = "value")
-temp_long[, level := c(LeafTemp = "Leaf", CanTemp = "Canopy air")[as.character(level)]]
-p_temp <- ggplot(temp_long, aes(datetime, value - 273.15, colour = level)) +   # K -> degC
-  geom_line(linewidth = 0.5) +
-  scale_colour_manual(values = c(Leaf = "#e6550d", `Canopy air` = "#3182bd"), name = NULL) +
-  labs(title = "BCI: leaf and canopy air temperature", x = NULL, y = "Temperature (°C)") +
-  theme_bci
-save_plot(p_temp, "energy_01_leaf_canopy_temperature.png")
+temp_cols <- c("LeafTemp", "CanTemp")
+if (have_cols(temp_cols, dt)) {
+  temp_long <- melt(dt, id.vars = "datetime", measure.vars = temp_cols,
+                     variable.name = "level", value.name = "value")
+  temp_long[, level := c(LeafTemp = "Leaf", CanTemp = "Canopy air")[as.character(level)]]
+  p_temp <- ggplot(temp_long, aes(datetime, value - 273.15, colour = level)) +   # K -> degC
+    geom_line(linewidth = 0.5) +
+    scale_colour_manual(values = c(Leaf = "#e6550d", `Canopy air` = "#3182bd"), name = NULL) +
+    labs(title = "BCI: leaf and canopy air temperature", x = NULL, y = "Temperature (°C)") +
+    theme_bci
+  save_plot(p_temp, "energy_01_leaf_canopy_temperature.png")
+} else skip_note("energy_01_leaf_canopy_temperature.png", temp_cols, dt)
 
-energy_long <- melt(dt, id.vars = "datetime",
-                     measure.vars = c("Rnet", "SensibleAC"),
-                     variable.name = "term", value.name = "value")
-energy_long[, term := c(Rnet = "Net radiation", SensibleAC = "Sensible heat (canopy->atm)")[as.character(term)]]
-p_energy <- ggplot(energy_long, aes(datetime, value, colour = term)) +
-  geom_hline(yintercept = 0, colour = "grey60", linetype = "dashed") +
-  geom_line(linewidth = 0.5) +
-  scale_colour_brewer(palette = "Set1", name = NULL) +
-  labs(title = "BCI: energy balance", x = NULL, y = expression(Flux~(W/m^2))) +
-  theme_bci
-save_plot(p_energy, "energy_02_balance.png")
+energy_cols <- c("Rnet", "SensibleAC")
+if (have_cols(energy_cols, dt)) {
+  energy_long <- melt(dt, id.vars = "datetime", measure.vars = energy_cols,
+                       variable.name = "term", value.name = "value")
+  energy_long[, term := c(Rnet = "Net radiation", SensibleAC = "Sensible heat (canopy->atm)")[as.character(term)]]
+  p_energy <- ggplot(energy_long, aes(datetime, value, colour = term)) +
+    geom_hline(yintercept = 0, colour = "grey60", linetype = "dashed") +
+    geom_line(linewidth = 0.5) +
+    scale_colour_brewer(palette = "Set1", name = NULL) +
+    labs(title = "BCI: energy balance", x = NULL, y = expression(Flux~(W/m^2))) +
+    theme_bci
+  save_plot(p_energy, "energy_02_balance.png")
+} else skip_note("energy_02_balance.png", energy_cols, dt)
 
-p_soil <- ggplot(dt, aes(datetime, SoilMoist)) +
-  geom_line(colour = "#1f78b4", linewidth = 0.5) +
-  labs(title = "BCI: mean soil moisture across layers",
-       x = NULL, y = expression(Soil~moisture~(m^3/m^3))) +
-  theme_bci
-save_plot(p_soil, "energy_03_soil_moisture.png")
+if (have_cols("SoilMoist", dt)) {
+  p_soil <- ggplot(dt, aes(datetime, SoilMoist)) +
+    geom_line(colour = "#1f78b4", linewidth = 0.5) +
+    labs(title = "BCI: mean soil moisture across layers",
+         x = NULL, y = expression(Soil~moisture~(m^3/m^3))) +
+    theme_bci
+  save_plot(p_soil, "energy_03_soil_moisture.png")
+} else skip_note("energy_03_soil_moisture.png", "SoilMoist", dt)
 
 # =============================================================================
 # Forcing sanity check (input radiation, as seen by the model)
 # =============================================================================
 
-forcing_long <- melt(dt, id.vars = "datetime",
-                      measure.vars = c("RshortAtm", "RlongAtm"),
-                      variable.name = "band", value.name = "value")
-forcing_long[, band := c(RshortAtm = "Shortwave", RlongAtm = "Longwave")[as.character(band)]]
-p_forcing <- ggplot(forcing_long, aes(datetime, value, colour = band)) +
-  geom_line(linewidth = 0.5) +
-  scale_colour_manual(values = c(Shortwave = "#e6ab02", Longwave = "#a6761d"), name = NULL) +
-  labs(title = "BCI: incoming radiation forcing (as seen by the model)",
-       x = NULL, y = expression(Flux~(W/m^2))) +
-  theme_bci
-save_plot(p_forcing, "forcing_01_radiation.png")
+forcing_cols <- c("RshortAtm", "RlongAtm")
+if (have_cols(forcing_cols, dt)) {
+  forcing_long <- melt(dt, id.vars = "datetime", measure.vars = forcing_cols,
+                        variable.name = "band", value.name = "value")
+  forcing_long[, band := c(RshortAtm = "Shortwave", RlongAtm = "Longwave")[as.character(band)]]
+  p_forcing <- ggplot(forcing_long, aes(datetime, value, colour = band)) +
+    geom_line(linewidth = 0.5) +
+    scale_colour_manual(values = c(Shortwave = "#e6ab02", Longwave = "#a6761d"), name = NULL) +
+    labs(title = "BCI: incoming radiation forcing (as seen by the model)",
+         x = NULL, y = expression(Flux~(W/m^2))) +
+    theme_bci
+  save_plot(p_forcing, "forcing_01_radiation.png")
+} else skip_note("forcing_01_radiation.png", forcing_cols, dt)
 
 # =============================================================================
 # PFT x DBH-size-class matrices (from sizeclass_output_<resolution>.rds).
@@ -284,16 +335,24 @@ matrix_by_sizeclass_pft <- function(varname, title, fill_label) {
   save_plot(p, sprintf("sizeclass_%s.png", tolower(varname)), width = 9)
 }
 
-if (resolution == "monthly") {
-  matrix_by_sizeclass_pft("GPP", "BCI: GPP by size class and PFT", "GPP")
-  matrix_by_sizeclass_pft("NPP", "BCI: NPP by size class and PFT", "NPP")
-} else {
-  cat("Skipping sizeclass GPP/NPP plots - only meaningful at --resolution=monthly.\n")
+sizeclass_plot_specs <- list(
+  GPP      = list(title = "BCI: GPP by size class and PFT", fill = "GPP", monthly_only = TRUE),
+  NPP      = list(title = "BCI: NPP by size class and PFT", fill = "NPP", monthly_only = TRUE),
+  AGB      = list(title = "BCI: aboveground biomass by size class and PFT", fill = "AGB"),
+  LAI      = list(title = "BCI: leaf area index by size class and PFT", fill = "LAI"),
+  NPLANT   = list(title = "BCI: stem density by size class and PFT", fill = "Plants/m2"),
+  Bstorage = list(title = "BCI: storage carbon by size class and PFT", fill = "Bstorage"),
+  BasalArea = list(title = "BCI: basal area by size class and PFT", fill = expression(m^2/m^2))
+)
+for (varname in names(sizeclass_plot_specs)) {
+  spec <- sizeclass_plot_specs[[varname]]
+  if (!have_cols(varname, sc)) {
+    skip_note(sprintf("sizeclass_%s.png", tolower(varname)), varname, sc)
+  } else if (isTRUE(spec$monthly_only) && resolution != "monthly") {
+    cat("Skipping sizeclass_", tolower(varname), ".png - only meaningful at --resolution=monthly.\n", sep = "")
+  } else {
+    matrix_by_sizeclass_pft(varname, spec$title, spec$fill)
+  }
 }
-matrix_by_sizeclass_pft("AGB", "BCI: aboveground biomass by size class and PFT", "AGB")
-matrix_by_sizeclass_pft("LAI", "BCI: leaf area index by size class and PFT", "LAI")
-matrix_by_sizeclass_pft("NPLANT", "BCI: stem density by size class and PFT", "Plants/m2")
-matrix_by_sizeclass_pft("Bstorage", "BCI: storage carbon by size class and PFT", "Bstorage")
-matrix_by_sizeclass_pft("BasalArea", "BCI: basal area by size class and PFT", expression(m^2/m^2))
 
 cat("\nAll plots written to", fig_dir, "\n")

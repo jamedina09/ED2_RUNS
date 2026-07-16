@@ -396,6 +396,15 @@ table (dates, `PLANT_HYDRO_SCHEME`, `--pft_config`, `--restart_from`,
 `--output_freq`, ...) — every flag works identically whether you call
 this script directly or through `run_experiment.sh`.
 
+`--output_freq` (default `monthly`) is set at this step, not at run time —
+it controls `NL%IMOUTPUT`/`NL%IDOUTPUT`/`NL%IFOUTPUT` in the namelist this
+script writes, which in turn determines which `analysis-{E,D,I}-*.h5`
+files ED2 actually produces when you run it in §4.3. If you decide later
+that you need a resolution you didn't request here, there's no way to add
+it after the fact — you must rebuild the namelist (this step) with the
+right `--output_freq` and re-run the model; see [§6.3](#63-output-resolution-monthly-daily-hourly)
+for the full mechanics.
+
 **Inputs**: `ED/run/ED2IN` (the template); if `--restart_from` is given,
 that experiment's `history-S-*.h5` files (§4.6).
 
@@ -470,6 +479,8 @@ Rscript R-tools/update_registry_status.R --exp=<exp_id> --status=completed --run
 # or, on failure:
 Rscript R-tools/update_registry_status.R --exp=<exp_id> --status=failed --notes="see run.log"
 ```
+
+This is not needed for a model run. It is a provided option so the user can keep track of any experiment.
 
 **Checking whether a run actually succeeded**: ED2 does not always exit
 with a nonzero status on failure. Check the log directly for the
@@ -561,6 +572,51 @@ the extraction script anchors these to day 1 of that month so the
 Extraction for one resolution is independent of any other — running it
 for `monthly` and then `daily` for the same experiment is safe and
 non-destructive, since each resolution writes to its own filenames.
+
+**Choosing which variables to extract (`--variables`, `--sizeclass_variables`)
+— this is the answer to "how do I get a specific list of variables instead
+of the fixed default set"**: by default, extraction pulls a fixed, curated
+set of ~23 ecosystem-scale variables and all 7 size-class variables (the
+same set this script has always extracted). Pass a comma-separated list to
+extract something different instead:
+
+```sh
+Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> \
+    --variables=GPP,NPP,LeafTemp --sizeclass_variables=AGB,NPLANT
+```
+
+- **`--variables`** (ecosystem-scale table) accepts either this script's
+  own friendly column names (`GPP`, `LeafTemp`, `SensibleAC`, ... — the
+  same names that appear as columns in `timeseries_output_<resolution>.csv`
+  today) **or any raw ED2 variable name straight from `variable_catalog.csv`**
+  (§4.5) for a polygon-scale (`_PY`) variable not in the curated set — e.g.
+  `--variables=ATM_TMP_PY` works even though air temperature isn't one of
+  the ~23 defaults. A resolution prefix (`MMEAN_`/`DMEAN_`/`FMEAN_`) is
+  optional on a raw name; the script strips whichever one you included and
+  substitutes the correct one for the `--resolution` you're extracting at.
+  A requested variable that doesn't exist in the file at all becomes an
+  all-`NA` column rather than an error — check `variable_catalog.csv` if a
+  column comes back empty.
+- **`--sizeclass_variables`** (PFT × size-class table) is a **closed** list
+  — it must be a subset of `LAI`, `AGB`, `NPLANT`, `Bstorage`, `BasalArea`,
+  `GPP`, `NPP`, since those are the only variables ED2 writes in the
+  17×11 PFT-by-size-class shape; unlike `--variables` it cannot be extended
+  to arbitrary raw names.
+- Not sure what's available to add? Run `describe_variables.R` (§4.5)
+  first — its `variable_catalog.csv` is the reference for every raw
+  variable name, its dimensions, and its "kind" (polygon scalar,
+  PFT × size-class array, ...).
+- **Plotting a restricted extraction is safe**: `plot_bci_output.R` (§4.5)
+  checks each plot's required column(s) before building it and skips that
+  one plot — with a console note, not an error — if a variable wasn't
+  extracted. E.g. extracting only `--variables=GPP,NPP` still produces
+  the carbon-flux plot's *available* half correctly and simply skips
+  every plot needing a column you didn't request.
+- Re-running extraction for the same `--exp`/`--resolution` with a
+  different `--variables`/`--sizeclass_variables` list overwrites that
+  resolution's `timeseries_output_*`/`sizeclass_output_*` files — it does
+  not merge with a previous extraction, so include everything you want in
+  one call.
 
 ### 4.5 Step 5 — Plot the Output and Catalog Variables
 
@@ -1115,8 +1171,8 @@ structure and naming convention; see [§9](#9-adding-a-new-site)):
 | `data_preparation/build_bci_datasets.R` | `sites/BCI/raw_data/`, `R-utils/`, `ED2_Support_Files-master/` | `sites/BCI/run/met/*.h5` + `ED_MET_DRIVER_HEADER`, `sites/BCI/run/init/*.pss`/`*.css` | Builds the met driver and vegetation initial condition (§4.1). Experiment-independent — run once, shared by every experiment at this site. |
 | `data_preparation/lib_load_utils.R` | — | — | Sourced helper (not run directly): loads the specific `R-utils/`/`ED2_Support_Files-master/` functions `build_bci_datasets.R` needs. |
 | `model_runs/build_bci_ed2in.R` | `ED/run/ED2IN` (template); `R-tools/ed2in_io.R`; `--restart_from`'s `history-S-*.h5` if given | `sites/BCI/run/ED2IN-<exp_id>`; a row in `experiments_registry.csv` | Builds one experiment's namelist using `R-tools/ed2in_io.R`'s `read_ed2in()`/`modify_ed2in()`/`write_ed2in()` (vendored from `PEcAn.ED2` — no PEcAn install required, see §2.1) — see §6.1's flag table (§4.2). Works around two confirmed bugs inherited from upstream `PEcAn.ED2` (still present in the vendored copy): `read_ed2in()` truncating multi-line array parameters (`SLZ`/`SLMSTR`/`STGOFF`), and (in unported upstream code this repo never calls) path-mangling convenience arguments that would bake in absolute host paths — this repo's script sets path-sensitive fields directly instead. |
-| `output_preparation/extract_bci_output.R` | `sites/BCI/run/experiments/<exp_id>/analysis-{E,D,I}-*.h5` (per `--resolution`) | `timeseries_output_<resolution>.{csv,rds}`, `sizeclass_output_<resolution>.{csv,rds}` | See §4.4. Reads HDF5 directly (`PEcAn.ED2::model2netcdf.ED2()` is broken by a `dplyr` version incompatibility in its per-cohort reshaping — not used). |
-| `output_preparation/plot_bci_output.R` | `timeseries_output_<resolution>.rds`, `sizeclass_output_<resolution>.rds` | `figures/<resolution>/{flux,stock,water,energy,forcing,sizeclass}_*.png` | See §4.5. Size-class GPP/NPP plots only appear at `--resolution=monthly` (cohort-level fluxes are monthly-only, §4.4). |
+| `output_preparation/extract_bci_output.R` | `sites/BCI/run/experiments/<exp_id>/analysis-{E,D,I}-*.h5` (per `--resolution`) | `timeseries_output_<resolution>.{csv,rds}`, `sizeclass_output_<resolution>.{csv,rds}` | See §4.4. `--variables`/`--sizeclass_variables` select which columns get extracted (default: the full curated set, unchanged from before those flags existed). Reads HDF5 directly (`PEcAn.ED2::model2netcdf.ED2()` is broken by a `dplyr` version incompatibility in its per-cohort reshaping — not used). |
+| `output_preparation/plot_bci_output.R` | `timeseries_output_<resolution>.rds`, `sizeclass_output_<resolution>.rds` | `figures/<resolution>/{flux,stock,water,energy,forcing,sizeclass}_*.png` | See §4.5. Size-class GPP/NPP plots only appear at `--resolution=monthly` (cohort-level fluxes are monthly-only, §4.4). Any plot whose required column(s) weren't extracted (via a restricted `--variables`/`--sizeclass_variables`) is skipped with a console note rather than erroring. |
 | `input_visualization/plot_met_input.R` | `sites/BCI/run/met/*.h5` | `sites/BCI/run/diagnostics/met/*.png` + joined CSV/RDS | QC/visualize the met **input** itself, independent of any experiment or model run. |
 | `input_visualization/plot_init_input.R` | `sites/BCI/run/init/*.pss`/`*.css` | `sites/BCI/run/diagnostics/init/*.png` + CSV | QC/visualize the vegetation **input** itself, independent of any experiment. |
 
@@ -1260,6 +1316,12 @@ Rscript sites/BCI/R/data_preparation/build_bci_datasets.R
 
 # Override a PFT's compiled-in parameters (e.g. wood density) - §7
 ./run_experiment.sh --site=BCI --name=high_rho_pft3 --pft_config=sites/BCI/pft_configs/high_rho_pft3.xml
+
+# Re-extract/plot just a specific set of variables instead of the full
+# default set (any raw variable_catalog.csv name works too) - §4.4
+Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> \
+    --variables=GPP,NPP,LeafTemp --sizeclass_variables=AGB,NPLANT
+Rscript sites/BCI/R/output_preparation/plot_bci_output.R --exp=<exp_id>
 
 # Find what you've run (across all sites), and compare two experiments at
 # the same site on one set of plots (§8.3)

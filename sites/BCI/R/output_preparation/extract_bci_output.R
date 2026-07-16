@@ -10,6 +10,37 @@
 # have been built with a matching --output_freq, e.g. --output_freq=daily
 # or --output_freq=monthly,daily,hourly; see build_bci_ed2in.R)
 #
+# --- Choosing which variables to extract (--variables, --sizeclass_variables) --
+# By default this script extracts a fixed, curated set of ~23 ecosystem-scale
+# variables and all 7 size-class variables (the same set it has always
+# extracted). To extract a different subset (or add one not in the default
+# set), pass a comma-separated list:
+#
+#   --variables=GPP,NPP,LeafTemp                circumscribed ecosystem-scale set
+#   --sizeclass_variables=AGB,NPLANT             circumscribed size-class set
+#
+# --variables accepts either this script's own friendly column names (GPP,
+# LeafTemp, SensibleAC, ... - see ECOSYSTEM_VAR_MAP below for the full list)
+# or, for any _PY polygon-scale variable NOT in that curated list, the raw
+# ED2 variable name exactly as it appears in variable_catalog.csv (see
+# R-tools/describe_variables.R) with the resolution prefix optionally
+# included or omitted (e.g. `ATM_TMP_PY` or `MMEAN_ATM_TMP_PY` both work at
+# --resolution=monthly) - this script strips a leading MMEAN_/DMEAN_/FMEAN_
+# and re-adds the correct one for whichever --resolution you asked for. Any
+# requested variable that doesn't exist at all in the file becomes an
+# all-NA column rather than an error (same fallback get_prefixed() has
+# always used) - check variable_catalog.csv if a column comes back empty.
+#
+# --sizeclass_variables must be a subset of: LAI, AGB, NPLANT, Bstorage,
+# BasalArea (native 17x11 arrays, any resolution) and GPP, NPP
+# (cohort-aggregated, monthly-only - see the cohort-flux note below).
+# Unlike --variables, this list is closed (not extensible to arbitrary raw
+# names) since these 7 are the only PFT x size-class-shaped variables ED2
+# writes.
+#
+# Run R-tools/describe_variables.R --site=BCI --exp=<id> first if you're not
+# sure what raw variable names are available to add.
+#
 # --- How ED2's output resolution actually works (confirmed by inspecting
 #     real output files, not assumed) --------------------------------------
 # Each resolution writes its own file series with its own one-letter tag in
@@ -87,6 +118,74 @@ N_DBH <- 11L
 DDBHI <- 0.1 # (n_dbh - 1) / maxdbh = 10 / 100 - see README.md for the idbh formula
 size_class_labels <- c(sprintf("%d-%d", seq(0, 90, 10), seq(10, 100, 10)), ">100")
 
+# =============================================================================
+# Ecosystem-scale variable selection (--variables)
+# =============================================================================
+# Friendly output column name -> ED2 base variable name (without the
+# resolution prefix - e.g. "GPP_PY", not "MMEAN_GPP_PY"). This is the
+# curated default set (unchanged from before --variables existed); anything
+# requested via --variables that isn't a key here is treated as a raw ED2
+# base name instead (see get_prefixed(), which is generic over any _PY
+# scalar regardless of whether it's in this table).
+ECOSYSTEM_VAR_MAP <- c(
+  GPP = "GPP_PY", NPP = "NPP_PY", PlantResp = "PLRESP_PY", HeteroResp = "RH_PY", NEP = "NEP_PY",
+  Transp = "TRANSP_PY", ET = "VAPOR_AC_PY", FSW = "FSW_PY", FS_open = "FS_OPEN_PY",
+  LeafWater = "LEAF_WATER_IM2_PY", WoodWater = "WOOD_WATER_IM2_PY",
+  WfluxGW = "WFLUX_GW_PY", WfluxWL = "WFLUX_WL_PY", WaterSupply = "WATER_SUPPLY_PY",
+  AvailableWater = "AVAILABLE_WATER_PY", LeafVPD = "LEAF_VPDEF_PY", CanVPD = "CAN_VPDEF_PY",
+  SoilMoist = "SOIL_WATER_PY", # special: averaged across 16 soil layers (get_prefixed_soil_mean())
+  LeafTemp = "LEAF_TEMP_PY", CanTemp = "CAN_TEMP_PY", SensibleAC = "SENSIBLE_AC_PY",
+  Rnet = "RNET_PY", RshortAtm = "ATM_RSHORT_PY", RlongAtm = "ATM_RLONG_PY"
+)
+SOIL_MEAN_VARS <- c("SoilMoist") # column names needing get_prefixed_soil_mean(), not get_prefixed()
+
+# Resolve a user's --variables tokens into a named vector (names = output
+# column name, values = ED2 base variable name), falling back to treating
+# an unrecognized token as a raw base name directly.
+resolve_ecosystem_vars <- function(requested) {
+  out_base <- character(length(requested))
+  for (i in seq_along(requested)) {
+    req <- requested[i]
+    out_base[i] <- if (req %in% names(ECOSYSTEM_VAR_MAP)) {
+      ECOSYSTEM_VAR_MAP[[req]]
+    } else {
+      sub("^(MMEAN_|DMEAN_|FMEAN_)", "", req) # tolerate a prefix if the user copied one from variable_catalog.csv
+    }
+  }
+  setNames(out_base, requested)
+}
+
+variables_flag <- .get_flag("variables", "")
+ecosystem_vars <- if (nzchar(variables_flag)) {
+  resolve_ecosystem_vars(trimws(strsplit(variables_flag, ",")[[1]]))
+} else {
+  ECOSYSTEM_VAR_MAP
+}
+
+# =============================================================================
+# Size-class variable selection (--sizeclass_variables)
+# =============================================================================
+SIZECLASS_STOCK_VARS <- c("LAI", "AGB", "NPLANT", "Bstorage", "BasalArea") # native (17x11) arrays
+SIZECLASS_FLUX_VARS <- c("GPP", "NPP") # cohort-aggregated, monthly-only
+SIZECLASS_RAW_NAME <- c(LAI = "LAI_PY", AGB = "AGB_PY", NPLANT = "NPLANT_PY",
+                         Bstorage = "BSTORAGE_PY", BasalArea = "BASAL_AREA_PY")
+ALL_SIZECLASS_VARS <- c(SIZECLASS_STOCK_VARS, SIZECLASS_FLUX_VARS)
+
+sizeclass_variables_flag <- .get_flag("sizeclass_variables", "")
+sizeclass_vars <- if (nzchar(sizeclass_variables_flag)) {
+  req <- trimws(strsplit(sizeclass_variables_flag, ",")[[1]])
+  invalid <- setdiff(req, ALL_SIZECLASS_VARS)
+  if (length(invalid) > 0) {
+    stop("--sizeclass_variables must be a subset of: ", paste(ALL_SIZECLASS_VARS, collapse = ", "),
+         " - got invalid: ", paste(invalid, collapse = ", "))
+  }
+  req
+} else {
+  ALL_SIZECLASS_VARS
+}
+stock_vars_requested <- intersect(SIZECLASS_STOCK_VARS, sizeclass_vars)
+flux_vars_requested <- intersect(SIZECLASS_FLUX_VARS, sizeclass_vars)
+
 file_tag <- c(monthly = "E", daily = "D", hourly = "I")[[resolution]]
 prefix <- c(monthly = "MMEAN_", daily = "DMEAN_", hourly = "FMEAN_")[[resolution]]
 n_steps <- if (resolution == "hourly") 24L else 1L
@@ -102,6 +201,8 @@ if (length(files) == 0) {
   )
 }
 cat("Found", length(files), sprintf("%s output files.\n", resolution))
+cat("Ecosystem-scale variables:", paste(names(ecosystem_vars), collapse = ", "), "\n")
+cat("Size-class variables:", paste(sizeclass_vars, collapse = ", "), "\n")
 
 # =============================================================================
 # Shared helpers
@@ -200,60 +301,40 @@ for (path in files) {
   f <- H5File$new(path, mode = "r")
   nms <- f$ls()$name
 
-  # --- Ecosystem-scale ------------------------------------------------------
-  soil_water <- get_prefixed_soil_mean(f, nms, "SOIL_WATER_PY")
-  ecosystem_rows[[length(ecosystem_rows) + 1]] <- data.table(
-    datetime = datetimes, year = year, month = month, day = day,
+  # --- Ecosystem-scale (whichever variables --variables resolved to) -------
+  row_dt <- data.table(datetime = datetimes, year = year, month = month, day = day)
+  for (i in seq_along(ecosystem_vars)) {
+    colname <- names(ecosystem_vars)[i]
+    base_name <- ecosystem_vars[[i]]
+    row_dt[[colname]] <- if (colname %in% SOIL_MEAN_VARS || base_name == "SOIL_WATER_PY") {
+      get_prefixed_soil_mean(f, nms, base_name)
+    } else {
+      get_prefixed(f, nms, base_name)
+    }
+  }
+  ecosystem_rows[[length(ecosystem_rows) + 1]] <- row_dt
 
-    GPP        = get_prefixed(f, nms, "GPP_PY"),
-    NPP        = get_prefixed(f, nms, "NPP_PY"),
-    PlantResp  = get_prefixed(f, nms, "PLRESP_PY"),
-    HeteroResp = get_prefixed(f, nms, "RH_PY"),
-    NEP        = get_prefixed(f, nms, "NEP_PY"),
-
-    Transp        = get_prefixed(f, nms, "TRANSP_PY"),
-    ET            = get_prefixed(f, nms, "VAPOR_AC_PY"),
-    FSW           = get_prefixed(f, nms, "FSW_PY"),
-    FS_open       = get_prefixed(f, nms, "FS_OPEN_PY"),
-    LeafWater     = get_prefixed(f, nms, "LEAF_WATER_IM2_PY"),
-    WoodWater     = get_prefixed(f, nms, "WOOD_WATER_IM2_PY"),
-    WfluxGW       = get_prefixed(f, nms, "WFLUX_GW_PY"),
-    WfluxWL       = get_prefixed(f, nms, "WFLUX_WL_PY"),
-    WaterSupply   = get_prefixed(f, nms, "WATER_SUPPLY_PY"),
-    AvailableWater = get_prefixed(f, nms, "AVAILABLE_WATER_PY"),
-    LeafVPD       = get_prefixed(f, nms, "LEAF_VPDEF_PY"),
-    CanVPD        = get_prefixed(f, nms, "CAN_VPDEF_PY"),
-    SoilMoist     = soil_water,
-
-    LeafTemp   = get_prefixed(f, nms, "LEAF_TEMP_PY"),
-    CanTemp    = get_prefixed(f, nms, "CAN_TEMP_PY"),
-    SensibleAC = get_prefixed(f, nms, "SENSIBLE_AC_PY"),
-    Rnet       = get_prefixed(f, nms, "RNET_PY"),
-    RshortAtm  = get_prefixed(f, nms, "ATM_RSHORT_PY"),
-    RlongAtm   = get_prefixed(f, nms, "ATM_RLONG_PY")
-  )
-
-  # --- PFT x size-class stocks + (monthly-only) cohort fluxes --------------
-  lai_steps <- get_pft_sizeclass_array(f, nms, "LAI_PY")
-  agb_steps <- get_pft_sizeclass_array(f, nms, "AGB_PY")
-  nplant_steps <- get_pft_sizeclass_array(f, nms, "NPLANT_PY")
-  bstorage_steps <- get_pft_sizeclass_array(f, nms, "BSTORAGE_PY")
-  basal_steps <- get_pft_sizeclass_array(f, nms, "BASAL_AREA_PY")
-  cohort_flux_steps <- if (resolution == "monthly") get_cohort_flux_sizeclass(f, nms) else NULL
+  # --- PFT x size-class stocks + (monthly-only) cohort fluxes (whichever
+  # variables --sizeclass_variables resolved to) ---------------------------
+  base_grid <- CJ(pft = BCI_PFTS, size_class_id = seq_len(N_DBH))
+  stock_steps <- lapply(stock_vars_requested, function(v) get_pft_sizeclass_array(f, nms, SIZECLASS_RAW_NAME[[v]]))
+  names(stock_steps) <- stock_vars_requested
+  cohort_flux_steps <- if (length(flux_vars_requested) > 0 && resolution == "monthly") get_cohort_flux_sizeclass(f, nms) else NULL
 
   for (step in seq_len(n_steps)) {
-    setnames(lai_steps[[step]], "value", "LAI")
-    setnames(agb_steps[[step]], "value", "AGB")
-    setnames(nplant_steps[[step]], "value", "NPLANT")
-    setnames(bstorage_steps[[step]], "value", "Bstorage")
-    setnames(basal_steps[[step]], "value", "BasalArea")
-    merged <- Reduce(function(a, b) merge(a, b, by = c("pft", "size_class_id"), all = TRUE),
-                      list(lai_steps[[step]], agb_steps[[step]], nplant_steps[[step]],
-                           bstorage_steps[[step]], basal_steps[[step]]))
-    if (!is.null(cohort_flux_steps)) {
-      merged <- merge(merged, cohort_flux_steps[[step]], by = c("pft", "size_class_id"), all = TRUE)
-    } else {
-      merged[, `:=`(GPP = NA_real_, NPP = NA_real_)]
+    merged <- copy(base_grid)
+    for (v in stock_vars_requested) {
+      tab <- copy(stock_steps[[v]][[step]])
+      setnames(tab, "value", v)
+      merged <- merge(merged, tab, by = c("pft", "size_class_id"), all.x = TRUE)
+    }
+    if (length(flux_vars_requested) > 0) {
+      if (!is.null(cohort_flux_steps)) {
+        flux_tab <- cohort_flux_steps[[step]][, c("pft", "size_class_id", flux_vars_requested), with = FALSE]
+        merged <- merge(merged, flux_tab, by = c("pft", "size_class_id"), all.x = TRUE)
+      } else {
+        for (v in flux_vars_requested) merged[, (v) := NA_real_]
+      }
     }
     merged[, `:=`(datetime = datetimes[step], year = year, month = month, day = day,
                   size_class = size_class_labels[size_class_id])]
@@ -269,24 +350,31 @@ setorder(ecosystem_dt, datetime)
 sizeclass_dt <- rbindlist(sizeclass_rows, fill = TRUE)
 setcolorder(sizeclass_dt, c("datetime", "year", "month", "day", "pft", "size_class_id", "size_class"))
 setorder(sizeclass_dt, datetime, pft, size_class_id)
-num_cols <- c("LAI", "AGB", "NPLANT", "Bstorage", "BasalArea", "GPP", "NPP")
+num_cols <- intersect(c("LAI", "AGB", "NPLANT", "Bstorage", "BasalArea", "GPP", "NPP"), names(sizeclass_dt))
 for (col in num_cols) sizeclass_dt[is.na(get(col)), (col) := 0]
 
 # --- Ecosystem totals and by-PFT sums (summed over size class), derived
 # from sizeclass_dt and merged into ecosystem_dt - plot_bci_output.R reads
 # these for the stock-total lines and by-PFT matrices, while sizeclass_dt
 # itself keeps the full PFT x size-class resolution for its own heatmaps.
-stock_totals <- sizeclass_dt[, .(LAI_total = sum(LAI), AGB_total = sum(AGB),
-                                  NPLANT_total = sum(NPLANT), Bstorage_total = sum(Bstorage)),
-                              by = datetime]
-by_pft <- sizeclass_dt[, .(LAI = sum(LAI), AGB = sum(AGB), NPLANT = sum(NPLANT), Bstorage = sum(Bstorage)),
-                        by = .(datetime, pft)]
-by_pft_wide <- dcast(by_pft, datetime ~ pft, value.var = c("LAI", "AGB", "NPLANT", "Bstorage"))
-setnames(by_pft_wide, setdiff(names(by_pft_wide), "datetime"),
-         gsub("_(\\d)$", "_pft\\1", setdiff(names(by_pft_wide), "datetime")))
-ecosystem_dt <- merge(ecosystem_dt, stock_totals, by = "datetime", all.x = TRUE)
-ecosystem_dt <- merge(ecosystem_dt, by_pft_wide, by = "datetime", all.x = TRUE)
-setorder(ecosystem_dt, datetime)
+# Only computed for whichever stock variables --sizeclass_variables
+# actually resolved to (default: all four) - if e.g. Bstorage was excluded,
+# there is simply no Bstorage_total/Bstorage_pft* column, and
+# plot_bci_output.R skips the plots that need it.
+totalable_stock_vars <- intersect(c("LAI", "AGB", "NPLANT", "Bstorage"), stock_vars_requested)
+if (length(totalable_stock_vars) > 0) {
+  stock_totals <- sizeclass_dt[, lapply(.SD, sum), by = datetime, .SDcols = totalable_stock_vars]
+  setnames(stock_totals, totalable_stock_vars, paste0(totalable_stock_vars, "_total"))
+  by_pft <- sizeclass_dt[, lapply(.SD, sum), by = .(datetime, pft), .SDcols = totalable_stock_vars]
+  by_pft_wide <- dcast(by_pft, datetime ~ pft, value.var = totalable_stock_vars)
+  setnames(by_pft_wide, setdiff(names(by_pft_wide), "datetime"),
+           gsub("_(\\d)$", "_pft\\1", setdiff(names(by_pft_wide), "datetime")))
+  ecosystem_dt <- merge(ecosystem_dt, stock_totals, by = "datetime", all.x = TRUE)
+  ecosystem_dt <- merge(ecosystem_dt, by_pft_wide, by = "datetime", all.x = TRUE)
+  setorder(ecosystem_dt, datetime)
+} else {
+  cat("No size-class stock variables requested (--sizeclass_variables) - skipping ecosystem-scale stock-total/by-PFT columns.\n")
+}
 
 cat("\nUnits are ED2's native output units (see ED/Doc/ for exact definitions;\n")
 cat("*_PY fluxes are commonly kgC/m2/yr, AGB/LAI are stocks per m2/m2).\n")
