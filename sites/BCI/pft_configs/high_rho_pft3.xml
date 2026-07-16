@@ -1,0 +1,25 @@
+<!--
+  Example PFT parameter override (see README.md section 7): raises PFT 3's
+  (mid-successional tropical) wood density from ED2's compiled-in default of
+  0.71 g/cm3 to 0.80 g/cm3 - a +12.7% increase, still well below PFT 4's
+  default of 0.90 g/cm3 (late successional), so the PFT 2 < 3 < 4 wood-
+  density ordering used elsewhere in this pipeline (e.g. the census-to-PFT
+  breakpoints in build_bci_datasets.R) stays intact.
+
+  Wood density (rho) is not just a standalone number in ED2: it's the input
+  to several derived allometric/hydraulic parameters computed in
+  ed_params.f90 (height allometry via b1Ht, biomass allometry via
+  b1Bl/b1Bs_small/b1Bs_large, sapwood_ratio, wood_Kmax/wood_psi50 when
+  PLANT_HYDRO_SCHEME > 0). ED2 recomputes all of these after applying this
+  XML (the "Init_derived_params_after_xml" step visible in every run log),
+  so this one override propagates correctly into PFT 3's whole allometry,
+  not just a raw density number.
+
+  Only PFT 3 is touched; PFTs 2 and 4 keep ED2's defaults (0.53, 0.90).
+-->
+<config>
+  <pft>
+    <num>3</num>
+    <rho>0.80</rho>
+  </pft>
+</config>
