@@ -16,7 +16,7 @@ library(ggplot2)
 
 # Locate the repo root from this script's own path (portable - works on any
 # machine/device, not tied to a specific home directory). See
-# README.md's architecture section for why this matters.
+# README.md's Repository Structure section (§3) for why this matters.
 .this_file <- sub("^--file=", "", grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)[1])
 .this_dir <- dirname(normalizePath(.this_file))
 .find_repo_root <- function(d) {

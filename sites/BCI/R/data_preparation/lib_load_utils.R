@@ -5,11 +5,10 @@
 #     function library
 #   - ED2_Support_Files-master/ - site-processing driver scripts
 #     that use those functions (tower_processing, soil_data_processing,
-#     pss+css_processing, tower_gapfilling_preproc). Downloaded fresh into
-#      (not an external, machine-specific path) so the whole
-#      tree - and this file's dependency on it - stays portable
-#     across machines/devices; see README.md's
-#     architecture section.
+#     pss+css_processing, tower_gapfilling_preproc). Downloaded into this
+#     repo's own root (not an external, machine-specific path), so the
+#     whole tree - and this file's dependency on it - stays portable
+#     across machines/devices; see README.md's Repository Structure section.
 #
 # We source only the specific files needed (not R-utils/load.everything.r,
 # which pulls in dozens of unrelated plotting/mapping packages) and predefine

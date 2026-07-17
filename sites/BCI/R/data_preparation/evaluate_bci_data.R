@@ -18,7 +18,7 @@
 
 # Locate the repo root from this script's own path (portable - works on any
 # machine/device, not tied to a specific home directory). See
-# README.md's architecture section for why this matters.
+# README.md's Repository Structure section (§3) for why this matters.
 .this_file <- sub("^--file=", "", grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)[1])
 .this_dir <- dirname(normalizePath(.this_file))
 .find_repo_root <- function(d) {
@@ -143,8 +143,8 @@ cat("Wood density (wsg) match against bci.spptable: ", nrow(living) - n_unmatche
 cat("\nThis is real, usable ForestGEO census data - build_bci_datasets.R",
     "uses it directly to build the vegetation initial condition (real",
     "forest structure: 248,715 stems as of census 8), not a bare-ground",
-    "start. See README.md section 9 for the full build (allometry, PFT",
-    "assignment, .pss/.css writing) and section 5's script reference.\n")
+    "start. See README.md section 4.1 for the full build (allometry, PFT",
+    "assignment, .pss/.css writing) and section 8.2 for the script reference.\n")
 
 cat("\n=========================================================\n")
 cat("Summary\n")

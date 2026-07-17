@@ -1,19 +1,27 @@
 #!/usr/bin/env Rscript
 # Plot the tidy BCI output produced by extract_bci_output.R, at whichever
-# --resolution (monthly/daily/hourly) was extracted. One script for both
-# the ecosystem-scale time series and the PFT x size-class heatmaps (these
-# used to be two separate plotting scripts).
+# --resolution (monthly/daily/hourly/yearly) was extracted. One script for
+# every resolution.
+#
+# monthly/daily/hourly plot the flux/state time series and PFT x size-class
+# stock heatmaps (ecosystem-scale carbon/water/energy variables). yearly
+# plots a COMPLETELY DIFFERENT kind of output instead - a demographic
+# census (growth/mortality/recruitment by PFT and size class) - since
+# extract_bci_output.R's --resolution=yearly reads different HDF5 variables
+# entirely (see that script's header). The two are handled by separate
+# code paths below, not shared plot logic.
 #
 # No stacked bars/areas anywhere: any variable broken down by PFT (or PFT x
 # size-class) is shown as a matrix (geom_tile heatmap) instead, since
 # stacking hides each PFT's/class's own trajectory behind the others.
 # Filenames are grouped by a category prefix (flux_/stock_/water_/energy_/
-# forcing_/sizeclass_) so they sort into coherent groups regardless of
-# resolution; figures for different resolutions of the same experiment go
-# into separate figures/<resolution>/ subfolders so extracting e.g. both
-# monthly and hourly never overwrites the other's plots.
+# forcing_/sizeclass_/demographic_) so they sort into coherent groups
+# regardless of resolution; figures for different resolutions of the same
+# experiment go into separate figures/<resolution>/ subfolders so
+# extracting e.g. both monthly and hourly never overwrites the other's
+# plots.
 #
-# Usage: Rscript sites/BCI/R/output_preparation/plot_bci_output.R --exp=<id> [--resolution=monthly|daily|hourly]
+# Usage: Rscript sites/BCI/R/output_preparation/plot_bci_output.R --exp=<id> [--resolution=monthly|daily|hourly|yearly]
 # (run extract_bci_output.R --exp=<same> --resolution=<same> first if the
 # .rds files don't exist yet)
 #
@@ -37,7 +45,7 @@ resolution <- .get_flag("resolution", "monthly")
 
 # Locate the repo root from this script's own path (portable - works on any
 # machine/device, not tied to a specific home directory). See
-# README.md's architecture section for why this matters.
+# README.md's Repository Structure section (§3) for why this matters.
 .this_file <- sub("^--file=", "", grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)[1])
 .this_dir <- dirname(normalizePath(.this_file))
 .find_repo_root <- function(d) {
@@ -55,8 +63,20 @@ fig_dir <- file.path(outdir, "figures", resolution)
 
 cat("Experiment:", exp_id, " Resolution:", resolution, "(", outdir, ")\n")
 
-eco_rds <- file.path(outdir, sprintf("timeseries_output_%s.rds", resolution))
-sc_rds <- file.path(outdir, sprintf("sizeclass_output_%s.rds", resolution))
+# yearly's files are named demographic_*, not timeseries_output_yearly.rds/
+# sizeclass_output_yearly.rds - those names are reserved for the flux/state
+# variable set monthly/daily/hourly produce, which yearly output doesn't
+# contain at all (see this script's header and extract_bci_output.R's).
+eco_rds <- if (resolution == "yearly") {
+  file.path(outdir, "demographic_output_yearly.rds")
+} else {
+  file.path(outdir, sprintf("timeseries_output_%s.rds", resolution))
+}
+sc_rds <- if (resolution == "yearly") {
+  file.path(outdir, "demographic_sizeclass_output_yearly.rds")
+} else {
+  file.path(outdir, sprintf("sizeclass_output_%s.rds", resolution))
+}
 if (!file.exists(eco_rds)) stop("Run extract_bci_output.R --resolution=", resolution, " first - missing ", eco_rds)
 if (!file.exists(sc_rds)) stop("Run extract_bci_output.R --resolution=", resolution, " first - missing ", sc_rds)
 dt <- readRDS(eco_rds)
@@ -109,6 +129,95 @@ matrix_by_pft <- function(measure_cols, title, fill_label) {
     theme(legend.position = "right")
 }
 
+# A size-class x datetime matrix (heatmap), faceted by PFT - used for both
+# the flux/state size-class stocks below and the yearly demographic rates,
+# since both share the same (datetime, pft, size_class) table shape.
+matrix_by_sizeclass_pft <- function(varname, title, fill_label) {
+  p <- ggplot(sc, aes(size_class, datetime, fill = get(varname))) +
+    geom_tile() +
+    facet_wrap(~pft_label, nrow = 1) +
+    scale_fill_viridis_c(name = fill_label) +
+    labs(title = title, x = "DBH size class (cm)", y = NULL) +
+    theme_bci +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  save_plot(p, sprintf("sizeclass_%s.png", tolower(varname)), width = 9)
+}
+
+if (resolution == "yearly") {
+  # ===========================================================================
+  # Yearly demographic census: ecosystem-scale totals and PFT x size-class
+  # growth/mortality/recruitment/harvest rates. Completely different content
+  # from monthly/daily/hourly's carbon/water/energy plots below - see this
+  # script's header.
+  # ===========================================================================
+
+  agb_cols <- c("AGB_growth", "AGB_mort", "AGB_recruit")
+  if (have_cols("AGB_total", dt)) {
+    p <- ggplot(dt, aes(datetime, AGB_total)) +
+      geom_line(colour = "#1b9e77", linewidth = 0.6) +
+      geom_point(colour = "#1b9e77", size = 1.5) +
+      labs(title = "BCI: total aboveground biomass (yearly census)",
+           x = NULL, y = "AGB (kgC/m2)") +
+      theme_bci
+    save_plot(p, "demographic_01_agb_total.png")
+  } else skip_note("demographic_01_agb_total.png", "AGB_total", dt)
+
+  if (have_cols(agb_cols, dt)) {
+    long <- melt(dt, id.vars = "datetime", measure.vars = agb_cols,
+                 variable.name = "term", value.name = "value")
+    long[, term := c(AGB_growth = "Growth", AGB_mort = "Mortality", AGB_recruit = "Recruitment")[as.character(term)]]
+    p <- ggplot(long, aes(datetime, value, colour = term)) +
+      geom_line(linewidth = 0.6) +
+      geom_point(size = 1.5) +
+      scale_colour_brewer(palette = "Set2", name = NULL) +
+      labs(title = "BCI: AGB growth/mortality/recruitment (yearly census)",
+           x = NULL, y = "AGB rate (kgC/m2/yr)") +
+      theme_bci
+    save_plot(p, "demographic_02_agb_growth_mort_recruit.png")
+  } else skip_note("demographic_02_agb_growth_mort_recruit.png", agb_cols, dt)
+
+  ba_cols <- c("BasalArea_growth", "BasalArea_mort", "BasalArea_recruit")
+  if (have_cols("BasalArea_total", dt)) {
+    p <- ggplot(dt, aes(datetime, BasalArea_total)) +
+      geom_line(colour = "#7570b3", linewidth = 0.6) +
+      geom_point(colour = "#7570b3", size = 1.5) +
+      labs(title = "BCI: total basal area (yearly census)",
+           x = NULL, y = expression(Basal~area~(m^2/m^2))) +
+      theme_bci
+    save_plot(p, "demographic_03_basal_area_total.png")
+  } else skip_note("demographic_03_basal_area_total.png", "BasalArea_total", dt)
+
+  if (have_cols(ba_cols, dt)) {
+    long <- melt(dt, id.vars = "datetime", measure.vars = ba_cols,
+                 variable.name = "term", value.name = "value")
+    long[, term := c(BasalArea_growth = "Growth", BasalArea_mort = "Mortality", BasalArea_recruit = "Recruitment")[as.character(term)]]
+    p <- ggplot(long, aes(datetime, value, colour = term)) +
+      geom_line(linewidth = 0.6) +
+      geom_point(size = 1.5) +
+      scale_colour_brewer(palette = "Set2", name = NULL) +
+      labs(title = "BCI: basal area growth/mortality/recruitment (yearly census)",
+           x = NULL, y = expression(Rate~(m^2/m^2/yr))) +
+      theme_bci
+    save_plot(p, "demographic_04_basal_area_growth_mort_recruit.png")
+  } else skip_note("demographic_04_basal_area_growth_mort_recruit.png", ba_cols, dt)
+
+  demographic_sizeclass_specs <- list(
+    AGB_growth       = list(title = "BCI: AGB growth by size class and PFT (yearly)", fill = "AGB growth"),
+    AGB_mort         = list(title = "BCI: AGB mortality by size class and PFT (yearly)", fill = "AGB mortality"),
+    AGB_cut          = list(title = "BCI: AGB harvested by size class and PFT (yearly)", fill = "AGB cut"),
+    BasalArea_growth = list(title = "BCI: basal area growth by size class and PFT (yearly)", fill = "BA growth"),
+    BasalArea_mort   = list(title = "BCI: basal area mortality by size class and PFT (yearly)", fill = "BA mortality"),
+    BasalArea_cut    = list(title = "BCI: basal area harvested by size class and PFT (yearly)", fill = "BA cut")
+  )
+  for (varname in names(demographic_sizeclass_specs)) {
+    spec <- demographic_sizeclass_specs[[varname]]
+    if (have_cols(varname, sc)) {
+      matrix_by_sizeclass_pft(varname, spec$title, spec$fill)
+    } else {
+      skip_note(sprintf("sizeclass_%s.png", tolower(varname)), varname, sc)
+    }
+  }
+} else {
 # =============================================================================
 # Carbon fluxes (ecosystem scale)
 # =============================================================================
@@ -324,17 +433,6 @@ if (have_cols(forcing_cols, dt)) {
 # extract_bci_output.R's header on why cohort-level fluxes are monthly-only).
 # =============================================================================
 
-matrix_by_sizeclass_pft <- function(varname, title, fill_label) {
-  p <- ggplot(sc, aes(size_class, datetime, fill = get(varname))) +
-    geom_tile() +
-    facet_wrap(~pft_label, nrow = 1) +
-    scale_fill_viridis_c(name = fill_label) +
-    labs(title = title, x = "DBH size class (cm)", y = NULL) +
-    theme_bci +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
-  save_plot(p, sprintf("sizeclass_%s.png", tolower(varname)), width = 9)
-}
-
 sizeclass_plot_specs <- list(
   GPP      = list(title = "BCI: GPP by size class and PFT", fill = "GPP", monthly_only = TRUE),
   NPP      = list(title = "BCI: NPP by size class and PFT", fill = "NPP", monthly_only = TRUE),
@@ -353,6 +451,7 @@ for (varname in names(sizeclass_plot_specs)) {
   } else {
     matrix_by_sizeclass_pft(varname, spec$title, spec$fill)
   }
+}
 }
 
 cat("\nAll plots written to", fig_dir, "\n")

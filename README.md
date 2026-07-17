@@ -29,7 +29,7 @@ repository, read this table first.
 | **PFT (Plant Functional Type)** | One of ED2's built-in vegetation categories (e.g. "tropical broadleaf, early successional"). ED2 ships with a fixed set of 17 PFTs; simulations choose a subset of these and can override their trait parameters — see [§7](#7-pft-configuration). |
 | **Cohort / Patch / Polygon** | ED2's internal spatial hierarchy, largest to smallest: a **polygon** is the whole simulated area (one per site here); a polygon contains one or more **patches** (areas of similar disturbance history); a patch contains **cohorts** (groups of trees of the same PFT and similar size, ED2's basic unit of vegetation dynamics). Output variable names ending in `_PY`, `_SI`, `_PA`, or `_CO` refer to polygon-, site-, patch-, or cohort-level quantities respectively. |
 | **`RUNTYPE` (`INITIAL` vs. `HISTORY`)** | Whether a run starts fresh from a vegetation census (`INITIAL`) or continues from an earlier experiment's saved internal state (`HISTORY`, a **restart** — see [§4.6](#46-restarting-or-continuing-a-run)). |
-| **Resolution (`monthly`/`daily`/`hourly`)** | How often ED2 writes output to disk during a run. All three can be enabled simultaneously; see [§6.3](#63-output-resolution-monthly-daily-hourly). |
+| **Resolution (`monthly`/`daily`/`hourly`/`yearly`)** | How often ED2 writes output to disk during a run. Multiple resolutions can be enabled simultaneously (`--output_freq=monthly,daily,...`). `monthly`/`daily`/`hourly` share the same flux/state variable set at different time-means; `yearly` is a completely different **demographic census** (growth/mortality/recruitment), not a coarser version of the other three — see [§6.3](#63-output-resolution-monthly-daily-hourly-yearly). |
 
 ## Table of Contents
 
@@ -251,11 +251,13 @@ ED2_RUNS/
         │   ├── pft_config-<exp_id>.xml    # copied in only if --pft_config was used (§7)
         │   └── experiments/
         │       └── <exp_id>/                 # e.g. baseline_20260716_110606
-        │           ├── analysis-{E,D,I}-*.h5, history-S-*.h5, history.xml, run.log
-        │           │                          # E=monthly, D=daily, I=hourly (§6.3); history-S-* is
-        │           │                          #   what --restart_from (§4.6) reads
-        │           ├── timeseries_output_<resolution>.{csv,rds}  # ecosystem-scale (§8.1)
-        │           ├── sizeclass_output_<resolution>.{csv,rds}   # PFT x DBH-size-class (§8.1)
+        │           ├── analysis-{E,D,I,Y}-*.h5, history-S-*.h5, history.xml, run.log
+        │           │                          # E=monthly, D=daily, I=hourly, Y=yearly (§6.3);
+        │           │                          #   history-S-* is what --restart_from (§4.6) reads
+        │           ├── timeseries_output_<resolution>.{csv,rds}  # ecosystem-scale, monthly/daily/hourly (§8.1)
+        │           ├── sizeclass_output_<resolution>.{csv,rds}   # PFT x DBH-size-class, monthly/daily/hourly (§8.1)
+        │           ├── demographic_output_yearly.{csv,rds}          # ecosystem-scale demographic census, yearly only (§8.1)
+        │           ├── demographic_sizeclass_output_yearly.{csv,rds} # PFT x size-class demographic rates, yearly only (§8.1)
         │           ├── variable_catalog.csv   # describe_variables.R (§8.2)
         │           └── figures/<resolution>/*.png  # one subfolder per --resolution
         └── R/                           # BCI's own site-specific scripts (§9: a new site mirrors this)
@@ -397,13 +399,15 @@ table (dates, `PLANT_HYDRO_SCHEME`, `--pft_config`, `--restart_from`,
 this script directly or through `run_experiment.sh`.
 
 `--output_freq` (default `monthly`) is set at this step, not at run time —
-it controls `NL%IMOUTPUT`/`NL%IDOUTPUT`/`NL%IFOUTPUT` in the namelist this
-script writes, which in turn determines which `analysis-{E,D,I}-*.h5`
-files ED2 actually produces when you run it in §4.3. If you decide later
-that you need a resolution you didn't request here, there's no way to add
-it after the fact — you must rebuild the namelist (this step) with the
-right `--output_freq` and re-run the model; see [§6.3](#63-output-resolution-monthly-daily-hourly)
-for the full mechanics.
+it controls `NL%IMOUTPUT`/`NL%IDOUTPUT`/`NL%IFOUTPUT`/`NL%IYOUTPUT` in the
+namelist this script writes, which in turn determines which
+`analysis-{E,D,I,Y}-*.h5` files ED2 actually produces when you run it in
+§4.3. If you decide later that you need a resolution you didn't request
+here, there's no way to add it after the fact — you must rebuild the
+namelist (this step) with the right `--output_freq` and re-run the model;
+see [§6.3](#63-output-resolution-monthly-daily-hourly-yearly) for the
+full mechanics (including why `yearly` is a fundamentally different kind
+of output, not just a coarser one).
 
 **Inputs**: `ED/run/ED2IN` (the template); if `--restart_from` is given,
 that experiment's `history-S-*.h5` files (§4.6).
@@ -461,16 +465,18 @@ tail -f /tmp/bci_run_<exp_id>.log          # or: podman stats --no-stream
 a `pft_config-<exp_id>.xml` override).
 
 **Outputs**: written into
-`sites/BCI/run/experiments/<exp_id>/` — `analysis-{E,D,I}-*.h5` (output
+`sites/BCI/run/experiments/<exp_id>/` — `analysis-{E,D,I,Y}-*.h5` (output
 at whichever resolutions were requested, §6.3), `history-S-*.h5` (full
 internal-state snapshots, used for restarts, §4.6), `history.xml` (the
 resolved parameter set actually used, useful for confirming a
 `--pft_config` override took effect), and `run.log` if you redirected it
 as shown above.
 
-**When running manually, update the registry yourself** so `list_experiments.R`
-(§8.3) stays accurate — `run_experiment.sh` does this automatically, but
-a manual run does not:
+**Optional: update the registry yourself** so `list_experiments.R` (§8.3)
+reflects this run's outcome — `run_experiment.sh` does this automatically,
+a manual run does not. ED2 itself does not need this step to run
+correctly; it exists purely so you can keep track of experiments run
+manually alongside those run through `run_experiment.sh`:
 
 ```sh
 Rscript R-tools/update_registry_status.R --exp=<exp_id> --status=running
@@ -479,8 +485,6 @@ Rscript R-tools/update_registry_status.R --exp=<exp_id> --status=completed --run
 # or, on failure:
 Rscript R-tools/update_registry_status.R --exp=<exp_id> --status=failed --notes="see run.log"
 ```
-
-This is not needed for a model run. It is a provided option so the user can keep track of any experiment.
 
 **Checking whether a run actually succeeded**: ED2 does not always exit
 with a nonzero status on failure. Check the log directly for the
@@ -491,6 +495,55 @@ grep -q "Time integration ends" /tmp/bci_run_<exp_id>.log && echo "completed"
 grep "FATAL" /tmp/bci_run_<exp_id>.log   # should print nothing
 ```
 
+**Stopping a running container**: every `run_ed2.sh` call (whether run
+directly, backgrounded with `&`, or launched by `run_experiment.sh`)
+starts exactly one `podman run --rm ...` container. Backgrounding the
+*shell command* (e.g. with `&` or by closing the terminal) does **not**
+stop the container itself — it keeps running in podman independently
+until the simulation finishes, fails, or is stopped explicitly.
+
+```sh
+# List every currently running container (ED2 or otherwise)
+podman ps
+
+# List every container, including ones that already exited
+podman ps -a
+```
+
+Each row's `NAMES` column shows a random container name (e.g.
+`jolly_feistel`) and its `COMMAND` column shows which `ED2IN-<exp_id>` it
+was launched with, so you can tell which experiment it belongs to. Stop
+one (or several) by name or container ID:
+
+```sh
+podman stop jolly_feistel
+podman stop <container_id_1> <container_id_2>   # stop several at once
+
+# Force-kill instead, if `stop` doesn't return promptly (sends SIGKILL
+# instead of SIGTERM - ED2 will not exit cleanly, but the container will)
+podman kill jolly_feistel
+```
+
+Because `run_ed2.sh` always passes `--rm` to `podman run`, a stopped
+container is removed automatically — there is no separate cleanup step,
+and `podman ps -a` should show nothing left behind afterward. Stopping a
+container this way leaves that experiment's output on disk exactly as far
+as it got (incomplete `analysis-*.h5`/`history-S-*.h5` files, no "Time
+integration ends" in the log) — `run_experiment.sh` correctly marks such
+an experiment `failed` in the registry (§4.3's status-checking snippet
+above also correctly reports "not completed" for it).
+
+> **Why you'd want to do this**: each ED2 run spawns its own set of
+> OpenMP threads sized to the podman machine's CPU count (visible as
+> `threads max: N` near the top of every run log) — running several
+> experiments at once oversubscribes those CPUs and slows every one of
+> them down proportionally (confirmed directly: three simultaneous runs
+> on a 6-CPU podman machine each ran several times slower than the
+> single-run timings in [§5](#5-automated-workflow-run_experimentsh)).
+> If you accidentally started more experiments than you meant to run
+> concurrently, stopping the extra ones (as above) is the fix — the
+> remaining container(s) will speed back up immediately.
+
 ### 4.4 Step 4 — Extract the Output
 
 **What it does**: reads ED2's raw HDF5 output files and consolidates them
@@ -499,38 +552,52 @@ variable — instead of leaving you to open dozens of HDF5 files by hand.
 
 **Why it's needed**: ED2 writes one HDF5 file *per output timestep* (one
 per month for monthly output, one per day for daily, etc.), each
-containing ~600 variables in ED2's own internal shapes (polygon-level
-scalars, 17×11 PFT-by-size-class arrays, per-cohort arrays whose length
-changes every timestep as cohorts fuse and split, ...). Extraction
-collapses this into two flat, plottable tables per experiment:
+containing hundreds of variables in ED2's own internal shapes
+(polygon-level scalars, 17×11 PFT-by-size-class arrays, per-cohort arrays
+whose length changes every timestep as cohorts fuse and split, ...).
+Extraction collapses this into two flat, plottable tables per experiment
+— but **which two tables depends on the resolution**, since `monthly`/
+`daily`/`hourly` and `yearly` are fundamentally different kinds of ED2
+output, not the same variables at different time-means (see
+[§6.3](#63-output-resolution-monthly-daily-hourly-yearly) for how this
+was confirmed):
 
-- `timeseries_output_<resolution>.{csv,rds}` — one row per timestep,
-  ecosystem-scale scalars: carbon fluxes (GPP, NPP, respiration), carbon
-  stocks (total and by PFT), plant hydraulics, energy balance, and
-  meteorological forcing as ED2 actually saw it.
-- `sizeclass_output_<resolution>.{csv,rds}` — one row per (timestep, PFT,
-  DBH size class) combination: biomass, leaf area, stem density, storage
-  carbon, and basal area broken down by both plant functional type *and*
-  tree size simultaneously (ED2's native 11-class DBH binning:
-  10 cm-wide classes from 0–100 cm, plus an 11th class for trees over
-  100 cm).
+- At `--resolution=monthly|daily|hourly`:
+  - `timeseries_output_<resolution>.{csv,rds}` — one row per timestep,
+    ecosystem-scale scalars: carbon fluxes (GPP, NPP, respiration), carbon
+    stocks (total and by PFT), plant hydraulics, energy balance, and
+    meteorological forcing as ED2 actually saw it.
+  - `sizeclass_output_<resolution>.{csv,rds}` — one row per (timestep,
+    PFT, DBH size class) combination: biomass, leaf area, stem density,
+    storage carbon, and basal area broken down by both plant functional
+    type *and* tree size simultaneously (ED2's native 11-class DBH
+    binning: 10 cm-wide classes from 0–100 cm, plus an 11th class for
+    trees over 100 cm).
+- At `--resolution=yearly`:
+  - `demographic_output_yearly.{csv,rds}` — one row per year,
+    ecosystem-scale totals: aboveground biomass and basal area, plus each
+    one's annual growth/mortality/recruitment.
+  - `demographic_sizeclass_output_yearly.{csv,rds}` — one row per (year,
+    PFT, DBH size class) combination: the same growth/mortality/harvest
+    rates broken down by PFT and tree size.
 
 ```sh
 Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> --resolution=monthly
 ```
 
-**Choosing a resolution — this is the answer to "how do I get hourly or
-daily output instead of just monthly"**: `--resolution` must be one of
-`monthly`, `daily`, or `hourly`, and must match a resolution that was
-actually enabled when the experiment's `ED2IN` was built (via
-`--output_freq`, §6.3) — extraction reads whichever HDF5 files exist
-(`analysis-E-*.h5` for monthly, `analysis-D-*.h5` for daily,
-`analysis-I-*.h5` for hourly) and fails clearly if the requested
-resolution's files aren't present:
+**Choosing a resolution — this is the answer to "how do I get hourly,
+daily, or yearly output instead of just monthly"**: `--resolution` must
+be one of `monthly`, `daily`, `hourly`, or `yearly`, and must match a
+resolution that was actually enabled when the experiment's `ED2IN` was
+built (via `--output_freq`, §6.3) — extraction reads whichever HDF5
+files exist (`analysis-E-*.h5` for monthly, `analysis-D-*.h5` for daily,
+`analysis-I-*.h5` for hourly, `analysis-Y-*.h5` for yearly) and fails
+clearly if the requested resolution's files aren't present:
 
 ```sh
 Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> --resolution=daily
 Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> --resolution=hourly
+Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> --resolution=yearly
 ```
 
 > **Warning — a resolution only has output once a full period of that
@@ -553,13 +620,17 @@ Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> --res
 > is a real ED2 output limitation, not a gap in the extraction script,
 > and the script prints a note to this effect when it happens.
 
-**Inputs**: `sites/BCI/run/experiments/<exp_id>/analysis-{E,D,I}-*.h5`
+**Inputs**: `sites/BCI/run/experiments/<exp_id>/analysis-{E,D,I,Y}-*.h5`
 (whichever resolution was requested).
 
-**Outputs**: `timeseries_output_<resolution>.{csv,rds}` and
-`sizeclass_output_<resolution>.{csv,rds}` inside that experiment's
-folder. The `.rds` files are what the plotting step (4.5) and
-`compare_experiments.R` (§8.3) read; the `.csv` files are for opening in
+**Outputs**: at `--resolution=monthly|daily|hourly`,
+`timeseries_output_<resolution>.{csv,rds}` and
+`sizeclass_output_<resolution>.{csv,rds}`; at `--resolution=yearly`,
+`demographic_output_yearly.{csv,rds}` and
+`demographic_sizeclass_output_yearly.{csv,rds}` instead (see the table
+above) — all inside that experiment's folder. The `.rds` files are what
+the plotting step (4.5) reads; `monthly`/`daily`/`hourly`'s are also what
+`compare_experiments.R` (§8.3) reads. The `.csv` files are for opening in
 a spreadsheet or another language.
 
 **Timestamps**: the `datetime` column matches each HDF5 file's actual
@@ -581,7 +652,7 @@ same set this script has always extracted). Pass a comma-separated list to
 extract something different instead:
 
 ```sh
-Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> \
+Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> --resolution=monthly \
     --variables=GPP,NPP,LeafTemp --sizeclass_variables=AGB,NPLANT
 ```
 
@@ -602,6 +673,17 @@ Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> \
   `GPP`, `NPP`, since those are the only variables ED2 writes in the
   17×11 PFT-by-size-class shape; unlike `--variables` it cannot be extended
   to arbitrary raw names.
+- **Always pass `--resolution` explicitly** rather than relying on its
+  `monthly` default, once an experiment has more than one resolution of
+  output available — e.g. an experiment built with
+  `--output_freq=monthly,hourly` has *both* `analysis-E-*.h5` and
+  `analysis-I-*.h5` files, and extracting without `--resolution=hourly`
+  will silently read the monthly ones instead of the hourly output you
+  meant to look at. If you extracted at multiple resolutions, run this
+  command once per resolution (each writes its own
+  `timeseries_output_<resolution>.*`/`sizeclass_output_<resolution>.*`
+  files, so repeating it is safe — see [§6.3](#63-output-resolution-monthly-daily-hourly-yearly)
+  for the full list of valid `--resolution` values).
 - Not sure what's available to add? Run `describe_variables.R` (§4.5)
   first — its `variable_catalog.csv` is the reference for every raw
   variable name, its dimensions, and its "kind" (polygon scalar,
@@ -614,9 +696,15 @@ Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> \
   every plot needing a column you didn't request.
 - Re-running extraction for the same `--exp`/`--resolution` with a
   different `--variables`/`--sizeclass_variables` list overwrites that
-  resolution's `timeseries_output_*`/`sizeclass_output_*` files — it does
-  not merge with a previous extraction, so include everything you want in
-  one call.
+  resolution's output files — it does not merge with a previous
+  extraction, so include everything you want in one call.
+- **At `--resolution=yearly`, `--variables`/`--sizeclass_variables` accept
+  a completely different set of names** (`AGB_total`, `AGB_growth`,
+  `BasalArea_mort`, ... — ED2's demographic census variables, not the
+  flux/state ones above), and `--variables` has no raw-name fallback at
+  this resolution. See [§6.3](#63-output-resolution-monthly-daily-hourly-yearly)
+  for why yearly output is a different kind of data entirely, and for the
+  full variable lists.
 
 ### 4.5 Step 5 — Plot the Output and Catalog Variables
 
@@ -649,13 +737,24 @@ Rscript R-tools/describe_variables.R --site=BCI --exp=<exp_id>
 
 This is a cross-site tool (hence `--site=`, unlike the two site-specific
 scripts above) — it introspects whichever HDF5 output file it can find
-for that experiment (preferring monthly, falling back to daily or hourly
-if no monthly file exists yet) and classifies every one of ED2's ~600
-variables by shape (polygon-level scalar, 17×11 PFT-by-size-class array,
-soil-layer array, per-cohort array, or other), plus a curated
-description/units/source-script for the ~35 variables this pipeline
-actually extracts. Writes
+for that experiment (preferring monthly, then falling back to daily, then
+hourly, then yearly, whichever exists first) and classifies every
+variable in that file by shape (polygon-level scalar, 17×11
+PFT-by-size-class array, soil-layer array, per-cohort array, or other),
+plus a curated description/units/source-script for the ~35 monthly
+flux/state variables this pipeline extracts by default (§4.4). If the
+file it opens turns out to be a yearly demographic census (§6.3) rather
+than a monthly/daily/hourly flux/state file, the shape-based
+classification still works, but almost none of its variables will match
+that curated dictionary — the raw name/dimensions/kind are still useful
+on their own. Writes
 `sites/BCI/run/experiments/<exp_id>/variable_catalog.csv`.
+
+> **Note:** unlike `extract_bci_output.R`/`plot_bci_output.R`, this
+> command deliberately has no `--resolution` flag — it auto-selects
+> whichever HDF5 file it can find (monthly first) rather than requiring
+> you to pick one, since its purpose is a one-off variable lookup, not
+> resolution-specific extraction.
 
 ### 4.6 Restarting or Continuing a Run
 
@@ -837,7 +936,7 @@ every flag works identically in both.
 | `--pft_config` | *(none)* | Path to an XML file overriding ED2's compiled-in PFT parameters — see [§7](#7-pft-configuration). |
 | `--restart_from` | *(none)* | An earlier experiment's `exp_id` to continue from (`RUNTYPE=HISTORY`) instead of starting `INITIAL` from the census — see [§4.6](#46-restarting-or-continuing-a-run). |
 | `--restart_date` | *(latest)* | Which of `--restart_from`'s `history-S-*.h5` snapshots to restart from, if not the most recent. Format `YYYY-MM-DD`. |
-| `--output_freq` | `monthly` | Comma-separated subset of `monthly`,`daily`,`hourly` — which output resolutions ED2 writes (and, via `run_experiment.sh`, which get extracted/plotted). See [§6.3](#63-output-resolution-monthly-daily-hourly). |
+| `--output_freq` | `monthly` | Comma-separated subset of `monthly`,`daily`,`hourly`,`yearly` — which output resolutions ED2 writes, all fully supported by `extract_bci_output.R`/`plot_bci_output.R`/`run_experiment.sh`. `yearly` is a demographic census, not a coarser version of the other three — see [§6.3](#63-output-resolution-monthly-daily-hourly-yearly). |
 
 ### 6.2 Climate Year Recycling
 
@@ -883,34 +982,59 @@ end do
 > on a real data year. To extend a run, just pass a later `--end_date` —
 > `METCYC1`/`METCYCF` stay fixed regardless of the simulation window.
 
-### 6.3 Output Resolution: Monthly, Daily, Hourly
+### 6.3 Output Resolution: Monthly, Daily, Hourly, Yearly
 
 `--output_freq` controls which of ED2's built-in output resolutions get
 written; pass a comma-separated list to get more than one from the same
 run:
 
 ```sh
-./run_experiment.sh --site=BCI --name=hires --output_freq=monthly,daily,hourly
+./run_experiment.sh --site=BCI --name=hires --output_freq=monthly,daily,hourly,yearly
 ```
 
 This maps directly onto `ED2IN`'s own `NL%IMOUTPUT`/`NL%IDOUTPUT`/
-`NL%IFOUTPUT` namelist variables — `build_bci_ed2in.R` turns each
-requested resolution on (`= 3`) and leaves the others off (`= 0`), and
-sets `NL%OUTFAST`/`NL%UNITFAST`/`NL%FRQFAST` for hourly output
+`NL%IFOUTPUT`/`NL%IYOUTPUT` namelist variables — `build_bci_ed2in.R` turns
+each requested resolution on (`= 3`) and leaves the others off (`= 0`),
+and sets `NL%OUTFAST`/`NL%UNITFAST`/`NL%FRQFAST` for hourly output
 (`FRQFAST=3600`, packed via `OUTFAST=-1` per ED2's own convention for
 sub-daily output). Each resolution writes its own HDF5 file series,
 confirmed via `ED/src/io/h5_output.F90`'s naming logic:
 
-| Resolution | `--output_freq` value | File pattern | Variable prefix |
+| Resolution | `--output_freq` value | File pattern | Content |
 | --- | --- | --- | --- |
-| Monthly | `monthly` | `analysis-E-*.h5` | `MMEAN_` |
-| Daily | `daily` | `analysis-D-*.h5` | `DMEAN_` |
-| Hourly | `hourly` | `analysis-I-*.h5` | `FMEAN_` |
+| Monthly | `monthly` | `analysis-E-*.h5` | Flux/state time-means (`MMEAN_` prefix) |
+| Daily | `daily` | `analysis-D-*.h5` | Flux/state time-means (`DMEAN_` prefix) |
+| Hourly | `hourly` | `analysis-I-*.h5` | Flux/state time-means (`FMEAN_` prefix) |
+| Yearly | `yearly` | `analysis-Y-*.h5` | Demographic census (no prefix — see below) |
 
-See [§4.4](#44-step-4--extract-the-output) for the two most important
-practical consequences of this — that a resolution only has output once
-a full period of that length has completed, and that not every variable
-is written at every resolution (per-cohort GPP/NPP are monthly-only).
+See [§4.4](#44-step-4--extract-the-output) for two important practical
+consequences that apply to monthly/daily/hourly — that a resolution only
+has output once a full period of that length has completed, and that not
+every variable is written at every resolution (per-cohort GPP/NPP are
+monthly-only).
+
+> **Warning — `yearly` is a fundamentally different *kind* of output, not
+> just a coarser time-mean.** Confirmed by direct inspection of a real
+> `analysis-Y-*.h5` file: it contains **zero** `MMEAN_`/`DMEAN_`/`FMEAN_`-
+> prefixed variables and **no GPP, NPP, respiration, water, or energy
+> variables at all**. Instead it is ED2's **demographic census** —
+> ecosystem-wide growth/mortality/recruitment totals
+> (`TOTAL_AGB`/`TOTAL_AGB_GROWTH`/`TOTAL_AGB_MORT`/`TOTAL_AGB_RECRUIT` and
+> the basal-area equivalents) plus the same four rates broken down by PFT
+> and DBH size class (native `(17 x 11)` arrays: `AGB_GROWTH`/`AGB_MORT`/
+> `AGB_CUT`/`BASAL_AREA_GROWTH`/`BASAL_AREA_MORT`/`BASAL_AREA_CUT`). If
+> you want carbon-flux or water/energy data at a yearly cadence, that is
+> **not** what `--output_freq=yearly` gives you — aggregate `monthly`
+> output yourself instead. `extract_bci_output.R --resolution=yearly`
+> therefore writes to different files than the other three resolutions —
+> `demographic_output_yearly.{csv,rds}` (ecosystem-scale totals) and
+> `demographic_sizeclass_output_yearly.{csv,rds}` (PFT x size-class
+> rates) — deliberately not `timeseries_output_yearly.*`/
+> `sizeclass_output_yearly.*`, since those names are reserved for the
+> flux/state variable set that yearly output does not contain.
+> `plot_bci_output.R --resolution=yearly` produces its own
+> `demographic_*.png`/`sizeclass_*.png` figures accordingly (see
+> [§8.1](#81-output-file-naming-convention)).
 
 ---
 
@@ -1139,11 +1263,14 @@ Inside `sites/<site>/run/experiments/<exp_id>/`:
 | `analysis-E-*.h5` | Raw ED2 monthly output (one file per month) |
 | `analysis-D-*.h5` | Raw ED2 daily output (one file per day) |
 | `analysis-I-*.h5` | Raw ED2 hourly/instantaneous output (one file per day, packed) |
+| `analysis-Y-*.h5` | Raw ED2 yearly demographic census output (one file per year — see [§6.3](#63-output-resolution-monthly-daily-hourly-yearly) for why this is not just a coarser version of the other three) |
 | `history-S-*.h5` | Full internal-state snapshots — what `--restart_from` (§4.6) reads |
 | `history.xml` | The resolved parameter set ED2 actually used, after any `--pft_config` override was applied |
 | `run.log` | ED2's console output, if you redirected it |
-| `timeseries_output_<resolution>.{csv,rds}` | Extracted ecosystem-scale scalars (§4.4) |
-| `sizeclass_output_<resolution>.{csv,rds}` | Extracted PFT × DBH-size-class breakdown (§4.4) |
+| `timeseries_output_<resolution>.{csv,rds}` | Extracted ecosystem-scale scalars, `--resolution` one of `monthly`/`daily`/`hourly` (§4.4) |
+| `sizeclass_output_<resolution>.{csv,rds}` | Extracted PFT × DBH-size-class breakdown, `--resolution` one of `monthly`/`daily`/`hourly` (§4.4) |
+| `demographic_output_yearly.{csv,rds}` | Extracted ecosystem-scale demographic totals, `--resolution=yearly` only (§4.4, §6.3) |
+| `demographic_sizeclass_output_yearly.{csv,rds}` | Extracted PFT × DBH-size-class demographic rates, `--resolution=yearly` only (§4.4, §6.3) |
 | `variable_catalog.csv` | Every raw output variable's name, dimensions, and (where known) meaning (§4.5) |
 | `figures/<resolution>/*.png` | Plots, one subfolder per resolution (§4.5) |
 
@@ -1158,7 +1285,7 @@ Inside `sites/<site>/run/experiments/<exp_id>/`:
 | `R-tools/registry_utils.R` | `experiments_registry.csv` | (sourced helper) | `registry_add()`/`registry_update_status()`/`registry_read()`. Not run directly — sourced by each site's ED2IN-builder script, `update_registry_status.R`, and `list_experiments.R`. |
 | `R-tools/ed2in_io.R` | — | (sourced helper) | `read_ed2in()`/`modify_ed2in()`/`write_ed2in()`, vendored from `PEcAn.ED2` (full attribution and license in the file's header) so this repo does not require installing the `PEcAn.ED2` package. Not run directly — sourced by each site's ED2IN-builder script (§2.1, §4.2). |
 | `R-tools/update_registry_status.R` | — | `experiments_registry.csv` | CLI wrapper around `registry_update_status()` so `run_experiment.sh` can update status without embedding R in the shell script. Doesn't need `--site` (`exp_id` is globally unique). |
-| `R-tools/describe_variables.R` | `sites/<site>/run/experiments/<exp_id>/analysis-{E,D,I}-*.h5` | `variable_catalog.csv` | Variable/dimension/units catalog — see §4.5. Falls back to daily/hourly files if no monthly file exists yet. Shape-based classification is site-agnostic. |
+| `R-tools/describe_variables.R` | `sites/<site>/run/experiments/<exp_id>/analysis-{E,D,I,Y}-*.h5` | `variable_catalog.csv` | Variable/dimension/units catalog — see §4.5. Falls back monthly → daily → hourly → yearly, whichever exists first. Shape-based classification is site-agnostic; the curated dictionary documents monthly flux/state variables specifically, so it won't match much if the file it opens turns out to be a yearly demographic census (§6.3). |
 | `R-tools/list_experiments.R` | `experiments_registry.csv` | console output only | List/filter every experiment ever built, across all sites — see §8.3. |
 | `R-tools/compare_experiments.R` | multiple experiments' `timeseries_output_<resolution>.rds` (same site, same resolution) | `sites/<site>/run/comparisons/<name>/*.png` | Overlay multiple experiments on shared axes — see §8.3. |
 
@@ -1171,8 +1298,8 @@ structure and naming convention; see [§9](#9-adding-a-new-site)):
 | `data_preparation/build_bci_datasets.R` | `sites/BCI/raw_data/`, `R-utils/`, `ED2_Support_Files-master/` | `sites/BCI/run/met/*.h5` + `ED_MET_DRIVER_HEADER`, `sites/BCI/run/init/*.pss`/`*.css` | Builds the met driver and vegetation initial condition (§4.1). Experiment-independent — run once, shared by every experiment at this site. |
 | `data_preparation/lib_load_utils.R` | — | — | Sourced helper (not run directly): loads the specific `R-utils/`/`ED2_Support_Files-master/` functions `build_bci_datasets.R` needs. |
 | `model_runs/build_bci_ed2in.R` | `ED/run/ED2IN` (template); `R-tools/ed2in_io.R`; `--restart_from`'s `history-S-*.h5` if given | `sites/BCI/run/ED2IN-<exp_id>`; a row in `experiments_registry.csv` | Builds one experiment's namelist using `R-tools/ed2in_io.R`'s `read_ed2in()`/`modify_ed2in()`/`write_ed2in()` (vendored from `PEcAn.ED2` — no PEcAn install required, see §2.1) — see §6.1's flag table (§4.2). Works around two confirmed bugs inherited from upstream `PEcAn.ED2` (still present in the vendored copy): `read_ed2in()` truncating multi-line array parameters (`SLZ`/`SLMSTR`/`STGOFF`), and (in unported upstream code this repo never calls) path-mangling convenience arguments that would bake in absolute host paths — this repo's script sets path-sensitive fields directly instead. |
-| `output_preparation/extract_bci_output.R` | `sites/BCI/run/experiments/<exp_id>/analysis-{E,D,I}-*.h5` (per `--resolution`) | `timeseries_output_<resolution>.{csv,rds}`, `sizeclass_output_<resolution>.{csv,rds}` | See §4.4. `--variables`/`--sizeclass_variables` select which columns get extracted (default: the full curated set, unchanged from before those flags existed). Reads HDF5 directly (`PEcAn.ED2::model2netcdf.ED2()` is broken by a `dplyr` version incompatibility in its per-cohort reshaping — not used). |
-| `output_preparation/plot_bci_output.R` | `timeseries_output_<resolution>.rds`, `sizeclass_output_<resolution>.rds` | `figures/<resolution>/{flux,stock,water,energy,forcing,sizeclass}_*.png` | See §4.5. Size-class GPP/NPP plots only appear at `--resolution=monthly` (cohort-level fluxes are monthly-only, §4.4). Any plot whose required column(s) weren't extracted (via a restricted `--variables`/`--sizeclass_variables`) is skipped with a console note rather than erroring. |
+| `output_preparation/extract_bci_output.R` | `sites/BCI/run/experiments/<exp_id>/analysis-{E,D,I,Y}-*.h5` (per `--resolution`) | monthly/daily/hourly: `timeseries_output_<resolution>.{csv,rds}`, `sizeclass_output_<resolution>.{csv,rds}`. yearly: `demographic_output_yearly.{csv,rds}`, `demographic_sizeclass_output_yearly.{csv,rds}` | See §4.4, §6.3. `--variables`/`--sizeclass_variables` select which columns get extracted (default: the full curated set for whichever resolution branch applies). `--resolution=yearly` reads a completely different, non-prefixed demographic variable set — not a coarser version of monthly/daily/hourly's flux/state variables. Reads HDF5 directly (`PEcAn.ED2::model2netcdf.ED2()` is broken by a `dplyr` version incompatibility in its per-cohort reshaping — not used). |
+| `output_preparation/plot_bci_output.R` | monthly/daily/hourly: `timeseries_output_<resolution>.rds`, `sizeclass_output_<resolution>.rds`. yearly: `demographic_output_yearly.rds`, `demographic_sizeclass_output_yearly.rds` | monthly/daily/hourly: `figures/<resolution>/{flux,stock,water,energy,forcing,sizeclass}_*.png`. yearly: `figures/yearly/{demographic,sizeclass}_*.png` | See §4.5, §6.3. Size-class GPP/NPP plots (monthly/daily/hourly branch) only appear at `--resolution=monthly` (cohort-level fluxes are monthly-only, §4.4). Any plot whose required column(s) weren't extracted (via a restricted `--variables`/`--sizeclass_variables`) is skipped with a console note rather than erroring. |
 | `input_visualization/plot_met_input.R` | `sites/BCI/run/met/*.h5` | `sites/BCI/run/diagnostics/met/*.png` + joined CSV/RDS | QC/visualize the met **input** itself, independent of any experiment or model run. |
 | `input_visualization/plot_init_input.R` | `sites/BCI/run/init/*.pss`/`*.css` | `sites/BCI/run/diagnostics/init/*.png` + CSV | QC/visualize the vegetation **input** itself, independent of any experiment. |
 
@@ -1198,7 +1325,7 @@ after its output has been deleted.
 **Compare experiments side by side:**
 
 ```sh
-Rscript R-tools/compare_experiments.R --site=BCI --exp=<id1>,<id2>[,<id3>,...]
+Rscript R-tools/compare_experiments.R --site=BCI --exp=<id1>,<id2>[,<id3>,...] --resolution=monthly
 Rscript R-tools/compare_experiments.R --site=BCI --exp=<id1>,<id2> --resolution=daily
 ```
 
@@ -1254,8 +1381,11 @@ and script-naming convention (§3, §8.2), so the cross-site tools
    — following the BCI pair's pattern (both take `--exp` and
    `--resolution`), **writing to `timeseries_output_<resolution>.{csv,rds}`
    and `sizeclass_output_<resolution>.{csv,rds}` exactly** (not
-   `<sitelower>_timeseries_output...`) so `R-tools/compare_experiments.R`
-   and `run_experiment.sh` can find them without needing to know anything
+   `<sitelower>_timeseries_output...`) at `monthly`/`daily`/`hourly`, and
+   to `demographic_output_yearly.{csv,rds}`/
+   `demographic_sizeclass_output_yearly.{csv,rds}` at `yearly` (§6.3) if
+   the new site supports it — so `R-tools/compare_experiments.R` and
+   `run_experiment.sh` can find them without needing to know anything
    site-specific about column names or PFT numbering.
 5. *(Optional)* `sites/<Site>/R/input_visualization/` for input QC plots,
    and `sites/<Site>/pft_configs/` for that site's own PFT-override XML
@@ -1285,6 +1415,8 @@ further changes:
 | Soil carbon pool values (`fsc`/`stsc`/`stsl`/`ssc`/`msn`/`fsn`) seem generic (BCI only) | These are illustrative defaults at BCI, not site-specific measurements | Treat soil-carbon-pool-dependent results with appropriate caution until site-specific values are available |
 | Unexplained placeholder files inside `sites/BCI/run/init/` | `build_bci_datasets.R`/`build_bci_ed2in.R` write two small decoy files to work around a real ED2 `filelist_c_` alphabetical-ordering bug | Leave them — do not "clean up" `sites/BCI/run/init/` by hand |
 | A simulated year's results don't match what you'd expect from that real calendar year | Met-year recycling (§6.2) means any run extending outside a site's real data range is replaying real years out of their original calendar order | Check which real year actually backed a given simulated year (via `METCYC1`/`METCYCF` and the recycling formula) before attributing results to "conditions in year X" |
+| `--resolution=yearly` extraction has no GPP/NPP/water/energy columns at all | Yearly output is a demographic census (growth/mortality/recruitment), not a yearly-mean version of monthly's flux/state variables — a real ED2 output difference, not a bug (§6.3) | Use `--resolution=monthly` for carbon-flux/water/energy data; use `yearly` only for growth/mortality/recruitment rates |
+| Multiple `run_experiment.sh`/`run_ed2.sh` runs are all far slower than the timing table in §5 suggests | Each ED2 run spawns its own set of OpenMP threads (matching the podman machine's CPU count); running several at once oversubscribes those CPUs, so every run slows down proportionally — not a bug, just resource contention | Run experiments one at a time for full speed, or accept the slowdown if running several deliberately in parallel; see [§4.3](#43-step-3--run-ed2) for how to check what's currently running and stop it |
 
 ---
 
@@ -1310,6 +1442,11 @@ Rscript sites/BCI/R/data_preparation/build_bci_datasets.R
 # Get hourly and daily output too (monthly is always on) - §6.3
 ./run_experiment.sh --site=BCI --name=hires --output_freq=monthly,daily,hourly
 
+# Also get the yearly demographic census (growth/mortality/recruitment by
+# PFT and size class - a different kind of output than the other three,
+# not just a coarser one - see §6.3)
+./run_experiment.sh --site=BCI --name=with_demography --output_freq=monthly,yearly
+
 # Continue an earlier experiment from where it left off, instead of
 # starting bare-ground/from the census again - §4.6
 ./run_experiment.sh --site=BCI --name=continued --restart_from=<earlier_exp_id> --end_date=2004-12-31
@@ -1318,15 +1455,16 @@ Rscript sites/BCI/R/data_preparation/build_bci_datasets.R
 ./run_experiment.sh --site=BCI --name=high_rho_pft3 --pft_config=sites/BCI/pft_configs/high_rho_pft3.xml
 
 # Re-extract/plot just a specific set of variables instead of the full
-# default set (any raw variable_catalog.csv name works too) - §4.4
-Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> \
+# default set (any raw variable_catalog.csv name works too) - §4.4.
+# Always state --resolution explicitly once more than one is available.
+Rscript sites/BCI/R/output_preparation/extract_bci_output.R --exp=<exp_id> --resolution=monthly \
     --variables=GPP,NPP,LeafTemp --sizeclass_variables=AGB,NPLANT
-Rscript sites/BCI/R/output_preparation/plot_bci_output.R --exp=<exp_id>
+Rscript sites/BCI/R/output_preparation/plot_bci_output.R --exp=<exp_id> --resolution=monthly
 
 # Find what you've run (across all sites), and compare two experiments at
 # the same site on one set of plots (§8.3)
 Rscript R-tools/list_experiments.R
-Rscript R-tools/compare_experiments.R --site=BCI --exp=<baseline_id>,<plant_hydro_id>
+Rscript R-tools/compare_experiments.R --site=BCI --exp=<baseline_id>,<plant_hydro_id> --resolution=monthly
 ```
 
 Every `run_experiment.sh --site=<site> --name=X` call auto-generates a

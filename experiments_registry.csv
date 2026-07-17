@@ -1,0 +1,2 @@
+exp_id,site,name,created_at,plant_hydro_scheme,start_date,end_date,pft_config,status,run_seconds,notes
+deployment_check_20260716_191145,BCI,deployment_check,2026-07-16 19:11:45,0,2003-01-01,2003-01-08,"",completed,77,"output_freq=monthly,daily"

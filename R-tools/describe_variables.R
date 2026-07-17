@@ -1,11 +1,18 @@
 #!/usr/bin/env Rscript
-# Catalog every variable ED2 actually wrote to an experiment's monthly
-# output: name, HDF5 dimensions, what "kind" of variable it is (ecosystem
-# scalar / PFT x size-class array / soil-layer array / per-cohort array /
-# other), units and a plain-language description where known, and which
-# extraction script (if any) already pulls it into a tidy table. This is
-# the answer to "what output variables are there and what do they mean" -
-# read this instead of re-deriving it from ED2's source or Doc/ each time.
+# Catalog every variable ED2 actually wrote to one of an experiment's
+# output files (preferring monthly, falling back to daily/hourly/yearly -
+# see below): name, HDF5 dimensions, what "kind" of variable it is
+# (ecosystem scalar / PFT x size-class array / soil-layer array /
+# per-cohort array / other), units and a plain-language description where
+# known, and which extraction script (if any) already pulls it into a
+# tidy table. This is the answer to "what output variables are there and
+# what do they mean" - read this instead of re-deriving it from ED2's
+# source or Doc/ each time. Note: the curated dictionary below documents
+# monthly flux/state variables specifically (extract_bci_output.R's
+# default set); if the file it actually opens is a yearly demographic
+# census (see extract_bci_output.R's header for why that's a different
+# variable set entirely), the shape-based classification in part 2 still
+# works, but few of its variables will match the curated dictionary.
 #
 # Two layers:
 #   1. A curated dictionary (below) of the ~40 variables the pipeline
@@ -41,7 +48,7 @@ exp_id <- .get_flag("exp", "001_baseline")
 
 # Locate the repo root from this script's own path (portable - works on any
 # machine/device, not tied to a specific home directory). See
-# README.md's architecture section for why this matters.
+# README.md's Repository Structure section (§3) for why this matters.
 .this_file <- sub("^--file=", "", grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)[1])
 .this_dir <- dirname(normalizePath(.this_file))
 .find_repo_root <- function(d) {
@@ -57,21 +64,24 @@ repo_root <- .find_repo_root(.this_dir)
 outdir <- file.path(repo_root, "sites", site, "run/experiments", exp_id)
 
 # Prefer a monthly file (most aggregated, so richest set of MMEAN_ variables
-# to catalog), but fall back to daily/hourly - a short run (e.g. a
-# --restart_from continuation shorter than one month, see README §12/§13)
-# may not have crossed a month boundary yet and so has no analysis-E-*.h5.
+# to catalog), falling back to daily/hourly/yearly in that order - a short
+# run (e.g. a --restart_from continuation shorter than one month, see
+# README §4.6) may not have crossed a month boundary yet and so has no
+# analysis-E-*.h5; an experiment built with --output_freq=yearly only has
+# analysis-Y-*.h5 at all (see README §6.3 for why yearly is a completely
+# different variable set, not just a coarser monthly).
 find_files <- function(tag) sort(list.files(outdir, pattern = sprintf("^analysis-%s-\\d{4}-\\d{2}-.*\\.h5$", tag), full.names = TRUE))
-files_by_tag <- list(E = find_files("E"), D = find_files("D"), I = find_files("I"))
+files_by_tag <- list(E = find_files("E"), D = find_files("D"), I = find_files("I"), Y = find_files("Y"))
 chosen_tag <- names(files_by_tag)[vapply(files_by_tag, length, integer(1)) > 0][1]
 if (is.na(chosen_tag)) {
-  stop("No analysis-{E,D,I}-*.h5 files found in ", outdir, " - has the model run yet?")
+  stop("No analysis-{E,D,I,Y}-*.h5 files found in ", outdir, " - has the model run yet?")
 }
 chosen_files <- files_by_tag[[chosen_tag]]
 latest_file <- chosen_files[length(chosen_files)]
 cat("Site:", site, " Experiment:", exp_id, "\n")
 cat("Cataloging variables from:", basename(latest_file),
     "(most recent of", length(chosen_files),
-    c(E = "monthly", D = "daily", I = "hourly")[[chosen_tag]], "files)\n\n")
+    c(E = "monthly", D = "daily", I = "hourly", Y = "yearly")[[chosen_tag]], "files)\n\n")
 
 # =============================================================================
 # 1. Curated dictionary - variables this pipeline specifically knows about

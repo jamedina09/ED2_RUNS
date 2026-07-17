@@ -59,16 +59,23 @@
 # --restart_date=<YYYY-MM-DD> (which of --restart_from's history-S-*.h5
 #   dates to use; defaults to the latest one available)
 #
-# --output_freq=monthly[,daily][,hourly] (default: monthly, same as before
-#   this flag existed). Comma-separated list of which ED2 output
-#   resolutions to write, on top of the always-on yearly restart/history
-#   files. Controls IMOUTPUT/IDOUTPUT/IFOUTPUT (see README.md): "monthly"
-#   -> analysis-E-*.h5 (one file/month, already what extract_bci_output.R
-#   reads), "daily" -> analysis-D-*.h5 (one file/day), "hourly" ->
-#   analysis-I-*.h5 (packed one file/day, 24 hourly steps each). Daily/
-#   hourly output is NOT read by the current extract_bci_output.R/
-#   extract_bci_sizeclass_output.R (those are monthly-only) - read the
-#   extra files directly with hdf5r if you need finer resolution.
+# --output_freq=monthly[,daily][,hourly][,yearly] (default: monthly, same as
+#   before this flag existed). Comma-separated list of which ED2 output
+#   resolutions to write - NOT to be confused with the always-on
+#   history-S-*.h5 restart files (a separate ISOUTPUT/FRQSTATE setting,
+#   untouched by this flag). Controls IMOUTPUT/IDOUTPUT/IFOUTPUT/IYOUTPUT
+#   (see README.md): "monthly" -> analysis-E-*.h5 (one file/month, already
+#   what extract_bci_output.R reads), "daily" -> analysis-D-*.h5 (one
+#   file/day), "hourly" -> analysis-I-*.h5 (packed one file/day, 24 hourly
+#   steps each), "yearly" -> analysis-Y-*.h5 (one file/simulated year - only
+#   has output once a run actually crosses a year boundary, same caveat as
+#   monthly needing a month boundary). NOTE: "yearly" is NOT a coarser
+#   version of monthly/daily/hourly - it's ED2's demographic census
+#   (growth/mortality/recruitment by PFT and size class), a completely
+#   different variable set with no GPP/NPP/water/energy variables at all
+#   (confirmed by direct HDF5 inspection - see extract_bci_output.R's
+#   header for the full explanation). extract_bci_output.R --resolution=
+#   monthly|daily|hourly|yearly reads whichever of these you requested.
 
 # --- Experiment selection ----------------------------------------------------
 .cli_args <- commandArgs(trailingOnly = TRUE)
@@ -101,7 +108,7 @@ output_freq_flag <- .get_flag("output_freq", "monthly")
 
 # Locate the repo root from this script's own path (portable - works on any
 # machine/device, not tied to a specific home directory). See
-# README.md's architecture section for why this matters.
+# README.md's Repository Structure section (§3) for why this matters.
 .this_file <- sub("^--file=", "", grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)[1])
 .this_dir <- dirname(normalizePath(.this_file))
 .find_repo_root <- function(d) {
@@ -138,8 +145,8 @@ if (nzchar(restart_from)) {
     stop(
       "No history-S-*.h5 restart files found in ", restart_dir, " - was ",
       "--restart_from='", restart_from, "' run with ISOUTPUT enabled ",
-      "(true by default; see --output_freq's header comment) and did it ",
-      "actually reach a restart-writing point (FRQSTATE/UNITSTATE)?"
+      "(on by default in the stock ED2IN template, NL%ISOUTPUT=3) and did ",
+      "it actually reach a restart-writing point (FRQSTATE/UNITSTATE)?"
     )
   }
   hist_dates <- regmatches(hist_files, regexpr("\\d{4}-\\d{2}-\\d{2}-\\d{6}", hist_files))
@@ -177,9 +184,9 @@ if (nzchar(restart_from)) {
   ))
 }
 
-# --- Output frequency (--output_freq) ---------------------------------------
+# --- Output frequency (--output_freq; see this script's header) ------------
 output_freqs <- trimws(strsplit(output_freq_flag, ",")[[1]])
-valid_freqs <- c("monthly", "daily", "hourly")
+valid_freqs <- c("monthly", "daily", "hourly", "yearly")
 if (!all(output_freqs %in% valid_freqs)) {
   stop("--output_freq must be a comma-separated list from: ", paste(valid_freqs, collapse = ", "),
        " - got: ", output_freq_flag)
@@ -187,6 +194,7 @@ if (!all(output_freqs %in% valid_freqs)) {
 imoutput <- if ("monthly" %in% output_freqs) 3L else 0L
 idoutput <- if ("daily" %in% output_freqs) 3L else 0L
 ifoutput <- if ("hourly" %in% output_freqs) 3L else 0L
+iyoutput <- if ("yearly" %in% output_freqs) 3L else 0L
 
 # --- Optional PFT parameter override (--pft_config) -------------------------
 # The XML must end up inside run_dir (the directory bind-mounted at /data),
@@ -254,6 +262,7 @@ ed2in <- modify_ed2in(
   IMOUTPUT = imoutput, # analysis-E-*.h5, monthly - what extract_bci_output.R reads
   IDOUTPUT = idoutput, # analysis-D-*.h5, daily
   IFOUTPUT = ifoutput, # analysis-I-*.h5, hourly (packed one file/day below)
+  IYOUTPUT = iyoutput, # analysis-Y-*.h5, yearly
   UNITFAST = 0, # FRQFAST's units: seconds
   FRQFAST = 3600, # 1 hour - only applies while IFOUTPUT is on
   OUTFAST = if (ifoutput == 3L) -1 else 0, # -1 = pack a day's hourly steps into one file
@@ -270,13 +279,13 @@ ed2in <- modify_ed2in(
   # --- Vegetation initial condition: real BCI census (build_bci_datasets.R),
   # UNLESS --restart_from is set, in which case SFILIN instead points at
   # that experiment's history-S-*.h5 prefix and IED_INIT_MODE is ignored by
-  # ED2 for RUNTYPE='HISTORY' (left at 6 regardless - harmless). -----------
-  IED_INIT_MODE = 6, # matches make_bioinit.r's pss/css column layout
-  # exactly (verified against ED/src/io/
-  # ed_read_ed10_20_history.f90's case(2,6) branch)
-  # Filename uses an integer lat but decimal lon - see the matching comment
-  # in build_bci_datasets.R for why (confirmed ED2 C-level file-glob bug
-  # with two decimal points in the lat/lon filename tag).
+  # ED2 for RUNTYPE='HISTORY' (left at 6 regardless - harmless).
+  # IED_INIT_MODE=6 matches make_bioinit.r's pss/css column layout exactly
+  # (verified against ED/src/io/ed_read_ed10_20_history.f90's case(2,6)
+  # branch). SFILIN's filename uses an integer lat but decimal lon - see the
+  # matching comment in build_bci_datasets.R for why (confirmed ED2 C-level
+  # file-glob bug with two decimal points in the lat/lon filename tag). -----
+  IED_INIT_MODE = 6,
   SFILIN = if (!is.null(restart_sfilin)) restart_sfilin else "init/BCI.lat9lon-79.846",
 
   # --- Soil: no database needed for a POI run (build_bci_datasets.R) -------
@@ -325,7 +334,7 @@ cat("ED_MET_DRIVER_DB:", reread[["ED_MET_DRIVER_DB"]], "\n")
 cat("FFILOUT:", reread[["FFILOUT"]], "\n")
 cat("IEDCNFGF:", reread[["IEDCNFGF"]], "\n")
 cat("Output frequency:", output_freq_flag,
-    sprintf("(IMOUTPUT=%d IDOUTPUT=%d IFOUTPUT=%d)\n", imoutput, idoutput, ifoutput))
+    sprintf("(IMOUTPUT=%d IDOUTPUT=%d IFOUTPUT=%d IYOUTPUT=%d)\n", imoutput, idoutput, ifoutput, iyoutput))
 
 registry_notes <- paste(c(
   if (nzchar(restart_from)) sprintf("restart_from=%s@%s", restart_from, run_start_date),
