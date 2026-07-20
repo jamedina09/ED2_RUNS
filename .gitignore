@@ -48,10 +48,13 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 
+# External/generated inputs, obtained per README.md §2 - not vendored here
 sites/BCI/raw_data
 
 R-utils
 
+# From https://github.com/mpaiao/ED2_Support_Files - git-clone into place,
+# see README.md §2.3. Not this project's code; license terms are its own.
 ED2_Support_Files-master
 
 ED/run

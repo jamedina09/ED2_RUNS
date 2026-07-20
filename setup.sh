@@ -40,5 +40,5 @@ mkdir -p ED/run
 podman cp "$CONTAINER:/opt/ed2_assets/ED2IN" ED/run/ED2IN
 
 echo "*** Done. R-utils/ and ED/run/ED2IN are ready (from ${IMAGE})."
-echo "Next: place site raw data (see README.md §2.4), then follow the manual"
+echo "Next: place site raw data (see README.md), then follow the manual"
 echo "or automated workflow (README.md §4/§5)."

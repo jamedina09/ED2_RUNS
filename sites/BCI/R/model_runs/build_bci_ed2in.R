@@ -266,7 +266,7 @@ ed2in <- modify_ed2in(
   UNITFAST = 0, # FRQFAST's units: seconds
   FRQFAST = 3600, # 1 hour - only applies while IFOUTPUT is on
   OUTFAST = if (ifoutput == 3L) -1 else 0, # -1 = pack a day's hourly steps into one file
-  # Baked into the ed2:personal image (see Dockerfile.personal) rather than
+  # Baked into the ed2 image itself (see ed2-personal-container) rather than
   # copied into every run dir - it's generic ED2 climatology, not BCI data.
   THSUMS_DATABASE = "/opt/ed2_common/ed_inputs/",
   VEG_DATABASE = "",

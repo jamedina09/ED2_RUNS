@@ -8,8 +8,7 @@ needed to go from raw site data to comparable, reproducible experiment
 output — without requiring you to compile ED2 yourself or hand-edit its
 namelist from scratch.
 
-**BCI (Barro Colorado Island, Panama) is the worked example shipped with
-this repo** (`sites/BCI/`), driven by real site data: a ForestGEO 50-ha
+**BCI (Barro Colorado Island, Panama) is the worked example (no data provided)** (`sites/BCI/`), driven by real site data: a ForestGEO 50-ha
 permanent plot census and QA/QC'd ESS-DIVE tower meteorology. Every
 example command below uses BCI, but nothing in the framework is
 BCI-specific — see [§9](#9-adding-a-new-site) for adding another site
@@ -164,8 +163,9 @@ version against another version's helper functions/namelist template.
 
 The image also bakes in `common/ed_inputs/` (chill-day/degree-day
 climatology and other generic ED2 startup data that is not site-specific) at
-`/opt/ed2_common/ed_inputs/`, so no per-site copy of that data is needed (see
-the `THSUMS_DATABASE` row in [§8.2](#82-script-reference-tables)).
+`/opt/ed2_common/ed_inputs/`, so no per-site copy of that data is needed —
+every site's ED2IN-builder script points `NL%THSUMS_DATABASE` straight at
+that in-image path (see `build_bci_ed2in.R` in [§8.2](#82-script-reference-tables)).
 
 You only need the [ed2-personal-container](https://github.com/jamedina09/ed2-personal-container)
 repo itself if you're building a new ED2 version from source yourself (that
@@ -181,6 +181,34 @@ setup step, never touches it.
 > (see that repo's README) — not needed for routine use, only source-level
 > spelunking.
 
+### 2.3 External Site-Processing Scripts (`ED2_Support_Files`)
+
+`sites/BCI/R/data_preparation/build_bci_datasets.R` (and any new site's
+equivalent script) sources helper functions from a second external
+source, alongside `R-utils/` (§2.2): the ED2 development lab's own
+site-processing driver scripts — `tower_processing/`,
+`pss+css_processing/`, `soil_data_processing/`, and others.
+
+**Provenance**: these come from
+[mpaiao/ED2_Support_Files](https://github.com/mpaiao/ED2_Support_Files),
+a repository this project does not own or maintain. Clone it into place
+at this repo's root — the exact folder name
+`ED2_Support_Files-master/` matters, since every script that sources
+from it (`lib_load_utils.R`, `build_bci_datasets.R`) hardcodes that path:
+
+```sh
+git clone https://github.com/mpaiao/ED2_Support_Files.git ED2_Support_Files-master
+```
+
+> **Not vendored into this repo on purpose.** `ED2_Support_Files-master/`
+> is listed in `.gitignore` and is never committed here, the same
+> treatment as `R-utils/` and `ED/run/ED2IN` (§2.2) — those are baked
+> into the `ed2` image and extracted by `setup.sh` instead. Unlike those
+> two, `ED2_Support_Files` isn't bundled into the image, so it needs this
+> one-time `git clone` instead of a `setup.sh` step; it is **not**
+> redistributed as part of this repository — clone it directly from its own source so you're
+> always getting mpaiao's actual, current terms, not a stale copy.
+
 ### 2.4 Site Raw Data
 
 `sites/BCI/raw_data/` should contain (already provided with this example
@@ -191,12 +219,6 @@ site):
 | `bci_climate/` | Official QA/QC'd BCI tower meteorology, hourly, 2003-2016 (Faybishenko, Knox, Chambers et al., LBNL/STRI, ESS-DIVE) | Building the met driver |
 | `bci_stem_data/` | ForestGEO 50-ha plot census #8 (`bci.stem8.rdata`) and a species table with wood density (`bci.spptable.rdata`) | Building the vegetation initial condition |
 | `bci_forcing_data/` | CLM5/ELM `surfdata_bci_*.nc` | Soil sand/clay texture fractions only |
-
-`ED2_Support_Files-master/` (the ED2 development lab's own
-site-processing driver scripts — `tower_processing/`,
-`pss+css_processing/`, `soil_data_processing/`) should also be present at
-this repo's root, alongside `R-utils/`: BCI's data-preparation script
-sources functions from both.
 
 ---
 
@@ -211,7 +233,7 @@ ED2_RUNS/
 │                                   # path looking for this (not .git) to find the repo root portably
 ├── R-utils/                       # ED2 lab physics/allometry functions, shared by every site (§2.2)
 ├── ED/run/ED2IN                   # stock ED2IN namelist template, shared by every site (§2.2)
-├── ED2_Support_Files-master/      # site-processing driver scripts, shared by every site (§2.4)
+├── ED2_Support_Files-master/      # external (mpaiao/ED2_Support_Files, git-cloned), shared by every site (§2.3)
 ├── R-tools/                       # cross-site, site-agnostic tools (§8) - distinct from each
 │   │                               #   site's own R/ below, and from R-utils/ above
 │   ├── registry_utils.R              # sourced helper: read/add/update experiments_registry.csv
@@ -339,7 +361,8 @@ Rscript sites/BCI/R/data_preparation/evaluate_bci_data.R
 Rscript sites/BCI/R/data_preparation/build_bci_datasets.R
 ```
 
-**Inputs**: `sites/BCI/raw_data/` (§2.4).
+**Inputs**: `sites/BCI/raw_data/` (§2.4) and `ED2_Support_Files-master/`
+(§2.3).
 
 **Outputs**:
 
@@ -1149,6 +1172,7 @@ cd ../ed2-personal-container   # sibling repo, cloned alongside this one
 podman build $(grep -v '^#' versions/d971a620.args | sed 's/^/--build-arg /') \
     -t ed2:build --target build -f docker/Dockerfile.personal .
 ```
+
 )
 
 | Tag | Meaning |
