@@ -66,11 +66,12 @@ This framework addresses both problems:
 
 **Division of responsibility**:
 
-- The **container image** (built from a separate repo,
-  `/Users/medinaja/ed2-personal-container`, your ED2 fork) provides the
-  compiled `ed2` binary. You do not need a Fortran toolchain or an ED2
-  source checkout on your host machine to run experiments — only to
-  rebuild the image itself, and only occasionally.
+- The **container image** (built and published from a separate repo,
+  [ed2-personal-container](https://github.com/jamedina09/ed2-personal-container))
+  provides the compiled `ed2` binary. You do not need a Fortran toolchain or
+  an ED2 source checkout on your host machine to run experiments — pull the
+  pre-built image and go; you only need that other repo if you're building a
+  new ED2 version yourself.
 - **This repository** provides everything else: site data, the scripts
   that turn that data into ED2's expected input formats, the scripts that
   build each experiment's namelist, the orchestration that runs the model
@@ -125,38 +126,34 @@ here.
   > this repo's ED2IN-builder scripts) are documented in
   > [§10](#10-troubleshooting-and-caveats) and in that file's header.
 
-### 2.2 Building the ED2 Container Image
+### 2.2 Getting the ED2 Container Image
 
-The `ed2:personal` image must exist before you can run any experiment.
-Check whether it already does:
-
-```sh
-podman images ed2:personal
-```
-
-If not, build it from the container repo (a separate repository from this
-one):
+An image must exist before you can run any experiment. The normal path is to
+**pull the pre-built image** — no Fortran toolchain, no ED2 source checkout,
+no build step:
 
 ```sh
-cd /Users/medinaja/ed2-personal-container
-podman build -t ed2:personal -f docker/Dockerfile.personal .
+podman pull ghcr.io/jamedina09/ed2:latest
 ```
 
-This step compiles ED2 from source inside the container — it does not
-require a Fortran compiler on your host. It also bakes in
-`common/ed_inputs/` (chill-day/degree-day climatology and other generic
-ED2 startup data that is not site-specific) at
-`/opt/ed2_common/ed_inputs/` inside the image, so no per-site copy of
-that data is needed (see the `THSUMS_DATABASE` row in
-[§8.2](#82-script-reference-tables)).
+`run_ed2.sh`/`run_experiment.sh` default to `ghcr.io/jamedina09/ed2:latest`.
+To pin a specific ED2 version instead (see
+[ed2-personal-container](https://github.com/jamedina09/ed2-personal-container)'s
+`CHANGELOG.md` for what's available), set `IMAGE_TAG` when running:
 
-This image, and everything else in this section, is **shared across every
-site** — you build it once regardless of how many sites you add later.
+```sh
+IMAGE_TAG=d971a620 ./run_ed2.sh sites/BCI/run ED2IN-<exp_id>
+```
 
-> **Note:** Rebuilding the image is only necessary the first time, or if
-> you intentionally update `ED2_GIT_REF` in the container repo to build a
-> different version of ED2. Routine experiment work never touches this
-> step.
+The image also bakes in `common/ed_inputs/` (chill-day/degree-day
+climatology and other generic ED2 startup data that is not site-specific) at
+`/opt/ed2_common/ed_inputs/`, so no per-site copy of that data is needed (see
+the `THSUMS_DATABASE` row in [§8.2](#82-script-reference-tables)).
+
+You only need the [ed2-personal-container](https://github.com/jamedina09/ed2-personal-container)
+repo itself if you're building a new ED2 version from source yourself (that
+repo's own README covers this) — routine experiment work never touches it,
+beyond the one-time asset extraction in the next section.
 
 ### 2.3 Extracting Shared ED2 Assets
 
@@ -175,11 +172,18 @@ directly:
 
 Pull both out of the image's intermediate **build stage** (the same
 Dockerfile, `build` target, before the final minimal-runtime stage strips
-away everything except the compiled binary):
+away everything except the compiled binary) — this does require the sibling
+[ed2-personal-container](https://github.com/jamedina09/ed2-personal-container)
+repo checked out alongside this one, since a `--target build` image isn't
+something that gets pushed to GHCR (only the final runtime stage is). Use
+the same version's pin file the runtime image you pulled was built from
+(`versions/<version>.args` in that repo — matches the `IMAGE_TAG` you're
+using here, `latest`'s version is in this repo's own `CHANGELOG.md`):
 
 ```sh
-cd /Users/medinaja/ed2-personal-container
-podman build -t ed2:build --target build -f docker/Dockerfile.personal .
+cd ../ed2-personal-container   # sibling repo, cloned alongside this one
+podman build $(grep -v '^#' versions/d971a620.args | sed 's/^/--build-arg /') \
+    -t ed2:build --target build -f docker/Dockerfile.personal .
 podman create --name ed2-extract ed2:build
 podman cp ed2-extract:/ED2/R-utils "$HOME/ED2_RUNS/R-utils"
 mkdir -p "$HOME/ED2_RUNS/ED/run"
@@ -188,8 +192,8 @@ podman rm ed2-extract
 ```
 
 `R-utils/` and `ED/run/ED2IN` land at this repo's root, shared by every
-site — you only redo this if you rebuild `ed2:build` from a different
-`ED2_GIT_REF`.
+site — you only redo this if you switch to a different `IMAGE_TAG`/ED2
+version.
 
 > **Tip:** This same "build the intermediate stage, then `podman cp` a
 > path out of it" pattern is also how you can inspect ED2's Fortran
@@ -345,7 +349,7 @@ and guarantees every experiment at a site is driven by identical inputs
 (a prerequisite for fair before/after comparisons).
 
 ```sh
-cd /Users/medinaja/ED2_RUNS
+cd ~/ED2_RUNS   # or wherever you cloned this repo
 
 # Optional: sanity-check the raw data before building anything from it
 # (confirms the census is real, non-corrupted forest structure data, not
@@ -441,8 +445,17 @@ Under the hood, `run_ed2.sh` bind-mounts `sites/BCI/run` into the
 container at `/data` and runs:
 
 ```sh
-podman run --rm --ulimit stack=-1:-1 -v "$(pwd)/sites/BCI/run:/data:Z" ed2:personal -f ED2IN-<exp_id>
+podman run --rm --ulimit stack=-1:-1 \
+    -e LOCAL_UID=$(id -u) -e LOCAL_GID=$(id -g) \
+    -v "$(pwd)/sites/BCI/run:/data:Z" \
+    ghcr.io/jamedina09/ed2:latest -f ED2IN-<exp_id>
 ```
+
+`LOCAL_UID`/`LOCAL_GID` matter — the image's entrypoint remaps its internal
+user to match, so output files land owned by you, not some container-internal
+default. `run_ed2.sh` passes these automatically (defaulting to your own
+account via `id -u`/`id -g`); only relevant if you're ever running the raw
+`podman run` command yourself instead of through the script.
 
 > **Important:** every path *inside* `ED2IN` (e.g. `SFILIN`,
 > `ED_MET_DRIVER_DB`, `FFILOUT`) is relative to `/data` — the mount
@@ -1404,6 +1417,8 @@ further changes:
 
 | Symptom | Explanation | What to do |
 | --- | --- | --- |
+| `Fortran runtime error: Cannot open file '...history.xml': Permission denied` (or any write failure into `sites/<site>/run/`) | The container's internal user didn't get remapped to your host UID/GID before writing into the bind-mounted run directory — usually because `LOCAL_UID`/`LOCAL_GID` weren't passed to `podman run` | `run_ed2.sh` passes these automatically as of the current version (defaulting to `id -u`/`id -g`) — if you're invoking `podman run` directly instead of through the script, add `-e LOCAL_UID=$(id -u) -e LOCAL_GID=$(id -g)` yourself. Confirmed reproducible the hard way — see `ed2-personal-container`'s `CHANGELOG.md` |
+| `groupmod: GID '...' already exists` and the container never starts | A bug in older `ed2` images: the entrypoint's `usermod`/`groupmod` didn't use `-o` (non-unique), so a host GID that collides with a container-built-in group (e.g. macOS's `staff`=GID 20 colliding with Ubuntu's `dialout`) crashes it | `podman pull ghcr.io/jamedina09/ed2:latest` to get the fixed image |
 | `WARNING! ... config.xml wasn't found` in the run log | Harmless. Every `ED2IN` has the `IEDCNFGF` hook set, but points at a placeholder path unless `--pft_config` was used | Ignore, unless you *did* pass `--pft_config` and expected an override — in that case, check the path you gave actually exists |
 | `No analysis-E-*.h5 files found ... for --resolution=monthly` | The run window was shorter than one month, so ED2 never wrote a monthly output file — this is expected, not a bug (§4.4) | Extract at `--resolution=daily` or `--resolution=hourly` instead, or extend the run past a month boundary |
 | `FATAL` "Plant Hydrodynamics is off-track" on a restart | `--plant_hydro_scheme` was changed across a `--restart_from` restart — not supported (§4.6) | Restart into the same `PLANT_HYDRO_SCHEME` the parent experiment used |
@@ -1423,10 +1438,10 @@ further changes:
 ## 11. TL;DR / Quick Reference
 
 ```sh
-# One-time setup (§2): podman machine running, ed2:personal image built,
+# One-time setup (§2): podman machine running, ed2 image pulled,
 # R-utils/ED2IN extracted, raw data in place.
 
-cd /Users/medinaja/ED2_RUNS
+cd ~/ED2_RUNS   # or wherever you cloned this repo
 
 # One-time per site: build the shared met driver + vegetation init (§4.1)
 Rscript sites/BCI/R/data_preparation/build_bci_datasets.R
