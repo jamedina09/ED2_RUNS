@@ -126,40 +126,17 @@ here.
   > this repo's ED2IN-builder scripts) are documented in
   > [§10](#10-troubleshooting-and-caveats) and in that file's header.
 
-### 2.2 Getting the ED2 Container Image
+### 2.2 One-Time Setup: Image + Shared Assets
 
-An image must exist before you can run any experiment. The normal path is to
-**pull the pre-built image** — no Fortran toolchain, no ED2 source checkout,
-no build step:
+Run once:
 
 ```sh
-podman pull ghcr.io/jamedina09/ed2:latest
+./setup.sh
 ```
 
-`run_ed2.sh`/`run_experiment.sh` default to `ghcr.io/jamedina09/ed2:latest`.
-To pin a specific ED2 version instead (see
-[ed2-personal-container](https://github.com/jamedina09/ed2-personal-container)'s
-`CHANGELOG.md` for what's available), set `IMAGE_TAG` when running:
-
-```sh
-IMAGE_TAG=d971a620 ./run_ed2.sh sites/BCI/run ED2IN-<exp_id>
-```
-
-The image also bakes in `common/ed_inputs/` (chill-day/degree-day
-climatology and other generic ED2 startup data that is not site-specific) at
-`/opt/ed2_common/ed_inputs/`, so no per-site copy of that data is needed (see
-the `THSUMS_DATABASE` row in [§8.2](#82-script-reference-tables)).
-
-You only need the [ed2-personal-container](https://github.com/jamedina09/ed2-personal-container)
-repo itself if you're building a new ED2 version from source yourself (that
-repo's own README covers this) — routine experiment work never touches it,
-beyond the one-time asset extraction in the next section.
-
-### 2.3 Extracting Shared ED2 Assets
-
-Two things live inside the ED2 source tree that are not distributed
-separately from the compiled binary, and that this repo's R scripts need
-directly:
+This pulls the image (`ghcr.io/jamedina09/ed2:latest` by default — no
+Fortran toolchain, no ED2 source checkout, no build step) and extracts two
+things baked into it that this repo's R scripts need directly:
 
 - **`R-utils/`** — the ED2 development lab's own physics and allometry
   helper functions (shortwave radiation partitioning, solar geometry,
@@ -170,37 +147,39 @@ directly:
   only the fields that vary (coordinates, dates, output settings, ...),
   never by writing one from scratch.
 
-Pull both out of the image's intermediate **build stage** (the same
-Dockerfile, `build` target, before the final minimal-runtime stage strips
-away everything except the compiled binary) — this does require the sibling
-[ed2-personal-container](https://github.com/jamedina09/ed2-personal-container)
-repo checked out alongside this one, since a `--target build` image isn't
-something that gets pushed to GHCR (only the final runtime stage is). Use
-the same version's pin file the runtime image you pulled was built from
-(`versions/<version>.args` in that repo — matches the `IMAGE_TAG` you're
-using here, `latest`'s version is in this repo's own `CHANGELOG.md`):
+Both land at this repo's root, shared by every site. To pin a specific ED2
+version instead of `latest` (see
+[ed2-personal-container](https://github.com/jamedina09/ed2-personal-container)'s
+`CHANGELOG.md` for what's available), set `IMAGE_TAG` — `run_ed2.sh`/
+`run_experiment.sh` take the same variable, so use it consistently:
 
 ```sh
-cd ../ed2-personal-container   # sibling repo, cloned alongside this one
-podman build $(grep -v '^#' versions/d971a620.args | sed 's/^/--build-arg /') \
-    -t ed2:build --target build -f docker/Dockerfile.personal .
-podman create --name ed2-extract ed2:build
-podman cp ed2-extract:/ED2/R-utils "$HOME/ED2_RUNS/R-utils"
-mkdir -p "$HOME/ED2_RUNS/ED/run"
-podman cp ed2-extract:/ED2/ED/run/ED2IN "$HOME/ED2_RUNS/ED/run/ED2IN"
-podman rm ed2-extract
+IMAGE_TAG=d971a620 ./setup.sh
+IMAGE_TAG=d971a620 ./run_ed2.sh sites/BCI/run ED2IN-<exp_id>
 ```
 
-`R-utils/` and `ED/run/ED2IN` land at this repo's root, shared by every
-site — you only redo this if you switch to a different `IMAGE_TAG`/ED2
-version.
+Re-run `./setup.sh` (with the matching `IMAGE_TAG`) after switching versions,
+to refresh `R-utils`/`ED2IN` to match — otherwise you'd be running one ED2
+version against another version's helper functions/namelist template.
 
-> **Tip:** This same "build the intermediate stage, then `podman cp` a
-> path out of it" pattern is also how you can inspect ED2's Fortran
-> source directly for any question this README doesn't answer — e.g. to
-> see the full list of XML-configurable PFT parameters yourself
-> ([§7.3](#73-full-list-of-overridable-pft-parameters)), without ever
-> checking out the ED2 source tree on your host.
+The image also bakes in `common/ed_inputs/` (chill-day/degree-day
+climatology and other generic ED2 startup data that is not site-specific) at
+`/opt/ed2_common/ed_inputs/`, so no per-site copy of that data is needed (see
+the `THSUMS_DATABASE` row in [§8.2](#82-script-reference-tables)).
+
+You only need the [ed2-personal-container](https://github.com/jamedina09/ed2-personal-container)
+repo itself if you're building a new ED2 version from source yourself (that
+repo's own README covers this) — routine experiment work, including this
+setup step, never touches it.
+
+> **Tip:** `podman cp` against a running/created container also works for
+> inspecting ED2's Fortran source directly for any question this README
+> doesn't answer — e.g. to see the full list of XML-configurable PFT
+> parameters yourself ([§7.3](#73-full-list-of-overridable-pft-parameters)).
+> The runtime image only has the compiled binary, not the source tree, so
+> for that you'd build the sibling repo's `--target build` stage locally
+> (see that repo's README) — not needed for routine use, only source-level
+> spelunking.
 
 ### 2.4 Site Raw Data
 
@@ -230,8 +209,8 @@ ED2_RUNS/
 ├── experiments_registry.csv       # every experiment ever built, at any site: id, site, config, status (§8.3)
 ├── .ed2_repo_root                 # empty marker file; every script walks up from its own
 │                                   # path looking for this (not .git) to find the repo root portably
-├── R-utils/                       # ED2 lab physics/allometry functions, shared by every site (§2.3)
-├── ED/run/ED2IN                   # stock ED2IN namelist template, shared by every site (§2.3)
+├── R-utils/                       # ED2 lab physics/allometry functions, shared by every site (§2.2)
+├── ED/run/ED2IN                   # stock ED2IN namelist template, shared by every site (§2.2)
 ├── ED2_Support_Files-master/      # site-processing driver scripts, shared by every site (§2.4)
 ├── R-tools/                       # cross-site, site-agnostic tools (§8) - distinct from each
 │   │                               #   site's own R/ below, and from R-utils/ above
@@ -380,7 +359,7 @@ and is unaffected by anything under `sites/<site>/run/`.
 
 ### 4.2 Step 2 — Build the Experiment's `ED2IN` Namelist
 
-**What it does**: takes the stock `ED2IN` template (§2.3) and overrides
+**What it does**: takes the stock `ED2IN` template (§2.2) and overrides
 the fields specific to this one experiment — simulation dates, which
 physiological options are enabled, where output should be written, and
 (optionally) a restart source or PFT parameter override — producing
@@ -1159,10 +1138,18 @@ if you need a trait not listed here), run:
 podman run --rm --entrypoint grep ed2:build -n "getConfigREAL.*'pft'" /ED2/ED/src/io/ed_xml_config.f90
 ```
 
-(This requires the `ed2:build` intermediate image from
-[§2.3](#23-extracting-shared-ed2-assets) — the same one-liner pattern
-used there to pull files out of the build stage, here used to search it
-instead.)
+(This requires building the sibling
+[ed2-personal-container](https://github.com/jamedina09/ed2-personal-container)
+repo's `--target build` stage locally — the runtime image doesn't carry the
+ED2 source tree, only the compiled binary and two extracted files, see
+[§2.2](#22-one-time-setup-image--shared-assets)'s Tip callout:
+
+```sh
+cd ../ed2-personal-container   # sibling repo, cloned alongside this one
+podman build $(grep -v '^#' versions/d971a620.args | sed 's/^/--build-arg /') \
+    -t ed2:build --target build -f docker/Dockerfile.personal .
+```
+)
 
 | Tag | Meaning |
 | --- | --- |
@@ -1438,10 +1425,9 @@ further changes:
 ## 11. TL;DR / Quick Reference
 
 ```sh
-# One-time setup (§2): podman machine running, ed2 image pulled,
-# R-utils/ED2IN extracted, raw data in place.
-
+# One-time setup (§2): podman machine running, raw data in place, then:
 cd ~/ED2_RUNS   # or wherever you cloned this repo
+./setup.sh
 
 # One-time per site: build the shared met driver + vegetation init (§4.1)
 Rscript sites/BCI/R/data_preparation/build_bci_datasets.R

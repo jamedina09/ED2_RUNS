@@ -6,6 +6,31 @@ it's meant to be used with. The image itself is built from
 — see that repo's own `CHANGELOG.md` for the underlying ED2/toolchain
 versions.
 
+## v1.1.0 — 2026-07-20
+
+- Added `setup.sh`: one command (`./setup.sh`) replaces the old §2.2/§2.3
+  process of separately cloning `ed2-personal-container` and building its
+  ~700MB `--target build` stage locally just to `podman cp` two small files
+  (`R-utils/`, `ED2IN`) out of it. Both are now baked into the runtime image
+  itself (`ed2-personal-container`'s `d971a620` assets-update release), so
+  `setup.sh` just pulls the image (skipping the pull if already present
+  locally) and extracts them directly — no second repo, no local build.
+  Same `IMAGE_TAG`/`IMAGE` overrides as `run_ed2.sh`; re-run after switching
+  ED2 versions to refresh `R-utils`/`ED2IN` to match.
+- Updated README §2.2 (merged the old §2.2/§2.3 into one section) and the
+  TL;DR to reflect this; fixed cross-references to the old §2.3 elsewhere
+  in the doc; the PFT-parameter-search tip in §7.3 (which still legitimately
+  needs the `--target build` stage, for source inspection rather than asset
+  extraction) now gives its own self-contained command instead of pointing
+  at the removed one.
+
+**Verification performed:** ran `setup.sh` against the updated image, then
+`md5sum`-compared the extracted `R-utils`/`ED2IN` against the previous
+extraction method's output (byte-identical), then re-ran the full BCI
+pipeline end-to-end (156.8s, within normal variance of the previous run) to
+confirm nothing else regressed — not just that the new script runs without
+error.
+
 ## v1.0.0 — 2026-07-19
 
 - Works with image tag `d971a620` (and `latest`, at the time).
